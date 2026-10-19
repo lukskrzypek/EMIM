@@ -1,4 +1,4 @@
-"""Kierki: człowiek kontra bot albo symulacja wybrana liczby partii dwóch botów."""
+"""Kierki: liczba graczy, kontroler przy każdym miejscu, symulacja gdy nie ma człowieka."""
 
 from __future__ import annotations
 
@@ -10,14 +10,22 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from controllers.base import PlayerController
+from controllers.groq_icl_bot import GroqICLBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
 from engine.game import HeartsGameEngine
 from utils.icl_logger import ICLLogger
 
-NUM_PLAYERS = 2
+PLAYER_COUNTS = (2, 3, 4, 5)
 SAMPLES = 40
 LOG_PATH = ROOT / "logs" / "trajectories.jsonl"
+
+# (key, label) shown once per seat.
+CONTROLLER_CHOICES: tuple[tuple[str, str], ...] = (
+    ("human", "Człowiek"),
+    ("smart", "SmartHeartsBot"),
+    ("groq", "GroqICLBot"),
+)
 
 
 def play_deal(
@@ -128,14 +136,24 @@ def _show_batch(
     print("Prowadzi: " + ", ".join(_leaders(totals)))
 
 
-def _ask_yes_no(prompt: str) -> bool:
+def _ask_players() -> int:
+    options = ", ".join(str(n) for n in PLAYER_COUNTS)
     while True:
-        raw = input(prompt).strip().lower()
-        if raw in {"t", "tak", "y", "yes"}:
-            return True
-        if raw in {"n", "nie", "no"}:
-            return False
-        print("Wpisz t albo n.")
+        raw = input(f"Liczba graczy ({options}): ").strip()
+        if raw.isdigit() and int(raw) in PLAYER_COUNTS:
+            return int(raw)
+        print(f"Podaj jedną z liczb: {options}.")
+
+
+def _ask_kind(player_id: str) -> str:
+    print(f"\nKontroler dla {player_id}:")
+    for index, (_, label) in enumerate(CONTROLLER_CHOICES, start=1):
+        print(f"  [{index}] {label}")
+    while True:
+        raw = input("Wybierz: ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(CONTROLLER_CHOICES):
+            return CONTROLLER_CHOICES[int(raw) - 1][0]
+        print(f"Podaj numer od 1 do {len(CONTROLLER_CHOICES)}.")
 
 
 def _ask_deal_count() -> int:
@@ -146,26 +164,38 @@ def _ask_deal_count() -> int:
         print("Podaj dodatnią liczbę całkowitą.")
 
 
+def _make_controller(kind: str, player_id: str, seat: int) -> PlayerController:
+    if kind == "human":
+        return HumanCLIController()
+    if kind == "smart":
+        return SmartHeartsBot(num_samples=SAMPLES, seed=seat)
+    if kind == "groq":
+        return GroqICLBot(player_id, trajectories_path=LOG_PATH)
+    raise ValueError(f"Unknown controller: {kind!r}")
+
+
+def setup_match() -> tuple[int, dict[str, PlayerController], int, bool]:
+    """Ask for the table, then for a deal count when every seat is a bot."""
+    num_players = _ask_players()
+    kinds = [_ask_kind(f"P{i}") for i in range(num_players)]
+    controllers = {
+        f"P{i}": _make_controller(kinds[i], f"P{i}", i) for i in range(num_players)
+    }
+    labels = dict(CONTROLLER_CHOICES)
+    print()
+    for player_id, kind in zip(controllers, kinds, strict=True):
+        print(f"{player_id}: {labels[kind]}")
+    if "human" in kinds:
+        return num_players, controllers, 1, False
+    deals = _ask_deal_count()
+    print(f"Partii: {deals}")
+    return num_players, controllers, deals, deals == 1
+
+
 def main() -> None:
-    print(f"Kierki: {NUM_PLAYERS} graczy, SmartHeartsBot ({SAMPLES} losowań Monte Carlo)")
-    human_plays = _ask_yes_no("Czy grasz w tej partii? [t/n]: ")
-    if human_plays:
-        controllers: dict[str, PlayerController] = {
-            "P0": HumanCLIController(),
-            "P1": SmartHeartsBot(num_samples=SAMPLES, seed=1),
-        }
-        print("P0: Ty    P1: SmartHeartsBot")
-        deals = 1
-        show_play = False
-    else:
-        deals = _ask_deal_count()
-        controllers = {
-            f"P{i}": SmartHeartsBot(num_samples=SAMPLES, seed=i) for i in range(NUM_PLAYERS)
-        }
-        print(f"P0 i P1: SmartHeartsBot, partii: {deals}")
-        show_play = deals == 1
+    num_players, controllers, deals, show_play = setup_match()
     totals = play_session(
-        NUM_PLAYERS,
+        num_players,
         controllers,
         ICLLogger(LOG_PATH),
         deals=deals,
