@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import GroqICLBot, parse_card
+from controllers.groq_icl_bot import GroqICLBot, parse_card, read_api_key
 from engine.game import PlayerObservation
 
 
@@ -112,10 +112,33 @@ def test_wrong_player_id_raises() -> None:
         bot.select_move(make_obs(["3C", "QC"], player_id="P1"))
 
 
-def test_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="GROQ_API_KEY"):
-        GroqICLBot("P1").select_move(make_obs(["3C", "QC"]))
+def test_missing_api_key_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="groq_api_key.txt"):
+        GroqICLBot("P1", api_key_path=tmp_path / "groq_api_key.txt").select_move(
+            make_obs(["3C", "QC"])
+        )
+
+
+def test_empty_api_key_file_raises(tmp_path: Path) -> None:
+    path = tmp_path / "groq_api_key.txt"
+    path.write_text("  \n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="empty"):
+        read_api_key(path)
+
+
+def test_api_key_is_read_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "groq_api_key.txt"
+    path.write_text("  'gsk_test'  \n", encoding="utf-8")
+    seen: list[str] = []
+
+    def fake_groq(*, api_key: str) -> FakeClient:
+        seen.append(api_key)
+        return FakeClient('{"card": "QC"}')
+
+    monkeypatch.setattr("groq.Groq", fake_groq)
+    move = GroqICLBot("P1", api_key_path=path).select_move(make_obs(["3C", "QC"]))
+    assert move == "QC"
+    assert seen == ["gsk_test"]
 
 
 def test_prompt_contains_rules_state_examples_and_legal_reminder(tmp_path: Path) -> None:

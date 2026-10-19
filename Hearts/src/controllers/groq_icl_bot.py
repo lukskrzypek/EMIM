@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import random
 import re
 from collections import deque
@@ -17,7 +16,7 @@ from engine.game import PlayerObservation
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
-API_KEY_ENV = "GROQ_API_KEY"
+DEFAULT_API_KEY_PATH = Path(__file__).resolve().parents[2] / "groq_api_key.txt"
 
 _CARD_RE = re.compile(r"\b[2-9TJQKA][CDSH]\b")
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
@@ -91,6 +90,17 @@ def _format_example(index: int, record: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def read_api_key(path: Path) -> str:
+    """Return the key from the first non-empty line of ``path``."""
+    if not path.is_file():
+        raise RuntimeError(f"Put the Groq API key in {path} (one line).")
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key = line.strip().strip('"').strip("'")
+        if key:
+            return key
+    raise RuntimeError(f"{path} is empty.")
+
+
 def parse_card(text: str, legal_moves: list[str]) -> str | None:
     """Extract the chosen card from a model reply; ``None`` if not a legal move."""
     candidate: str | None = None
@@ -124,6 +134,7 @@ class GroqICLBot(PlayerController):
         temperature: float = 0.0,
         max_tokens: int = 64,
         api_key: str | None = None,
+        api_key_path: str | Path | None = None,
         client: Any | None = None,
         seed: int | None = None,
     ) -> None:
@@ -137,17 +148,16 @@ class GroqICLBot(PlayerController):
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._api_key = api_key
+        self._api_key_path = Path(api_key_path) if api_key_path is not None else DEFAULT_API_KEY_PATH
         self._client = client
         self._rng = random.Random(seed)
 
     # ------------------------------------------------------------------ API
 
     def _get_client(self) -> Any:
-        """Create the Groq SDK client lazily (needs ``groq`` and ``GROQ_API_KEY``)."""
+        """Create the Groq SDK client lazily (needs ``groq`` and ``groq_api_key.txt``)."""
         if self._client is None:
-            key = self._api_key or os.environ.get(API_KEY_ENV)
-            if not key:
-                raise RuntimeError(f"Set the {API_KEY_ENV} environment variable (or pass api_key).")
+            key = self._api_key if self._api_key is not None else read_api_key(self._api_key_path)
             try:
                 from groq import Groq
             except ImportError as exc:  # pragma: no cover - depends on environment

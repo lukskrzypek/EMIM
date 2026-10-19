@@ -3,5 +3,6 @@ __pycache__/
 .pytest_cache/
 logs/
 .venv/
+groq_api_key.txt
 README.md
 requirements.txt
