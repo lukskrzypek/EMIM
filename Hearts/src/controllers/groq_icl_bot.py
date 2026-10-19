@@ -15,7 +15,7 @@ from engine.game import PlayerObservation
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = "openai/gpt-oss-20b"
 DEFAULT_API_KEY_PATH = Path(__file__).resolve().parents[2] / "groq_api_key.txt"
 
 _CARD_RE = re.compile(r"\b[2-9TJQKA][CDSH]\b")
@@ -44,7 +44,8 @@ card on the table, so you do not win a trick with points.
 suit to create voids.
 - Use the history and the Voids line to infer where dangerous cards are.
 
-Output format: reply with ONLY a JSON object {"card": "<CODE>"}, where <CODE> is exactly \
+Output format: reply with ONLY a JSON object \
+{"card": "<CODE>", "reasoning": "<one short sentence>"}, where <CODE> is exactly \
 one entry from the Legal list of the current state. No other text."""
 
 
@@ -101,23 +102,72 @@ def read_api_key(path: Path) -> str:
     raise RuntimeError(f"{path} is empty.")
 
 
-def parse_card(text: str, legal_moves: list[str]) -> str | None:
-    """Extract the chosen card from a model reply; ``None`` if not a legal move."""
-    candidate: str | None = None
+def _json_card(text: str) -> str | None:
+    """Last ``{"card": "..."}`` value in ``text``, still unvalidated."""
+    found: str | None = None
     for blob in _JSON_RE.findall(text):
         try:
             data = json.loads(blob)
         except json.JSONDecodeError:
             continue
         if isinstance(data, dict) and isinstance(data.get("card"), str):
-            candidate = data["card"]
-    if candidate is None:
+            found = data["card"]
+    return found
+
+
+def _json_reasoning(text: str) -> str:
+    """Last ``reasoning`` string from a JSON object in ``text``."""
+    found = ""
+    for blob in _JSON_RE.findall(text):
+        try:
+            data = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("reasoning"), str):
+            found = data["reasoning"].strip()
+    return found
+
+
+def decision_reasoning(message: Any, text: str) -> str:
+    """Chain of thought from the API, or the JSON ``reasoning`` field."""
+    chain = ""
+    if not isinstance(message, str):
+        raw = getattr(message, "reasoning", None) or ""
+        if isinstance(raw, str):
+            chain = raw.strip()
+    return chain or _json_reasoning(text)
+
+
+def parse_card(text: str, legal_moves: list[str]) -> str | None:
+    """Extract the chosen card from a model reply; ``None`` if not a legal move."""
+    raw = _json_card(text)
+    if raw is None:
         tokens = _CARD_RE.findall(text.upper().replace("10", "T"))
-        candidate = tokens[-1] if tokens else None
-    if candidate is None:
+        raw = tokens[-1] if tokens else None
+    if raw is None:
         return None
-    candidate = candidate.strip().upper().replace("10", "T")
+    candidate = raw.strip().upper().replace("10", "T")
     return candidate if candidate in legal_moves else None
+
+
+def reply_text(message: Any) -> str:
+    """Text that holds the decision.
+
+    Reasoning models spend the token budget on ``message.reasoning`` and leave
+    ``content`` empty when generation is cut off. A finished answer is in
+    ``content``; an explicit JSON card inside ``reasoning`` is the fallback.
+    Cards merely mentioned in the reasoning prose are ignored.
+    """
+    if isinstance(message, str):
+        return message
+    content = getattr(message, "content", None) or ""
+    if isinstance(content, str) and content.strip():
+        return content
+    reasoning = getattr(message, "reasoning", None) or ""
+    if not isinstance(reasoning, str):
+        return ""
+    card = _json_card(reasoning)
+    return json.dumps({"card": card}) if card else ""
 
 
 class GroqICLBot(PlayerController):
@@ -132,7 +182,7 @@ class GroqICLBot(PlayerController):
         num_examples: int = 3,
         example_selection: Literal["last", "random"] = "last",
         temperature: float = 0.0,
-        max_tokens: int = 64,
+        max_tokens: int = 512,
         api_key: str | None = None,
         api_key_path: str | Path | None = None,
         client: Any | None = None,
@@ -184,7 +234,7 @@ class GroqICLBot(PlayerController):
             "Choose exactly one card, and ONLY from this list of legal moves: "
             + ", ".join(observation.legal_moves)
         )
-        parts.append('Reply with only JSON: {"card": "<CODE>"}')
+        parts.append('Reply with only JSON: {"card": "<CODE>", "reasoning": "<one short sentence>"}')
         system = SYSTEM_PROMPT + f"\n\nYou are player {self.player_id}."
         return [
             {"role": "system", "content": system},
@@ -201,24 +251,35 @@ class GroqICLBot(PlayerController):
             raise ValueError(
                 f"Bot controls {self.player_id}, but observation is for {observation.player_id}"
             )
+        self.last_reasoning = ""
         if len(legal) == 1:
             return legal[0]
 
         client = self._get_client()
         try:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=self.build_messages(observation),
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-            )
-            text = response.choices[0].message.content or ""
+            request: dict[str, Any] = {
+                "model": self.model,
+                "messages": self.build_messages(observation),
+                "temperature": self._temperature,
+                "max_tokens": self._max_tokens,
+            }
+            # gpt-oss writes a long chain of thought first. "low" leaves room
+            # for the JSON answer in content. The thought stays on message.reasoning.
+            if "gpt-oss" in self.model:
+                request["reasoning_effort"] = "low"
+            response = client.chat.completions.create(**request)
+            message = response.choices[0].message
+            text = reply_text(message)
+            self.last_reasoning = decision_reasoning(message, text)
         except Exception as exc:  # network / API / quota errors must not stop the game
             logger.warning("Groq request failed (%s); playing first legal move", exc)
+            self.last_reasoning = f"request failed: {exc}"
             return legal[0]
 
         move = parse_card(text, legal)
         if move is None:
             logger.warning("Illegal or unparsable Groq reply %r; playing first legal move", text)
+            if not self.last_reasoning:
+                self.last_reasoning = text.strip()
             return legal[0]
         return move

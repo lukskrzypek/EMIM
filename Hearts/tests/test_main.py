@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from controllers.base import PlayerController
 from controllers.groq_icl_bot import GroqICLBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import TOTAL_POINTS
+from engine.game import TOTAL_POINTS, HeartsGameEngine, PlayerObservation
 from utils.icl_logger import ICLLogger
 import main
 
@@ -91,6 +93,21 @@ def test_single_simulated_deal_is_shown_card_by_card(tmp_path: Path, capsys: pyt
     assert "Ręce:" in output
     assert "T1:" in output
     assert "Partia 1:" not in output
+
+
+class _Noted(PlayerController):
+    def select_move(self, observation: PlayerObservation) -> str:
+        self.last_reasoning = "ducked"
+        return observation.legal_moves[0]
+
+
+def test_play_deal_writes_controller_reasoning(tmp_path: Path) -> None:
+    engine = HeartsGameEngine(2, seed=1)
+    controllers = {pid: _Noted() for pid in engine.player_ids}
+    path = tmp_path / "trajectories.jsonl"
+    main.play_deal(engine, controllers, ICLLogger(path), show_play=False)
+    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert record["reasoning"] == "ducked"
 
 
 def test_session_rejects_non_positive_deal_count(tmp_path: Path) -> None:

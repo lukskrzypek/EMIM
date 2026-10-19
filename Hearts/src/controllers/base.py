@@ -10,6 +10,8 @@ from engine.game import PlayerObservation
 class PlayerController(ABC):
     """Chooses one legal card from a player's observation."""
 
+    last_reasoning: str = ""
+
     @abstractmethod
     def select_move(self, observation: PlayerObservation) -> str:
         """Return a card code that belongs to ``observation.legal_moves``."""

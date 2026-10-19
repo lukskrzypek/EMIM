@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import GroqICLBot, parse_card, read_api_key
+from controllers.groq_icl_bot import DEFAULT_MODEL, GroqICLBot, parse_card, read_api_key
 from engine.game import PlayerObservation
 
 
@@ -27,7 +27,7 @@ class FakeClient:
         self.calls.append(kwargs)
         if self._error is not None:
             raise self._error
-        message = SimpleNamespace(content=self._reply)
+        message = self._reply if not isinstance(self._reply, str) else SimpleNamespace(content=self._reply)
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
@@ -74,7 +74,7 @@ def test_is_player_controller() -> None:
 
 
 def test_default_model() -> None:
-    assert GroqICLBot("P1", client=FakeClient()).model == "llama-3.3-70b-versatile"
+    assert GroqICLBot("P1", client=FakeClient()).model == DEFAULT_MODEL
 
 
 def test_returns_card_from_json_reply() -> None:
@@ -82,7 +82,8 @@ def test_returns_card_from_json_reply() -> None:
     bot = GroqICLBot("P1", client=client)
     assert bot.select_move(make_obs(["3C", "QC", "AC"])) == "QC"
     assert len(client.calls) == 1
-    assert client.calls[0]["model"] == "llama-3.3-70b-versatile"
+    assert client.calls[0]["model"] == DEFAULT_MODEL
+    assert client.calls[0]["reasoning_effort"] == "low"
 
 
 def test_single_legal_move_skips_api() -> None:
@@ -93,6 +94,43 @@ def test_single_legal_move_skips_api() -> None:
 
 def test_illegal_card_falls_back_to_first_legal() -> None:
     client = FakeClient('{"card": "AS"}')
+    assert GroqICLBot("P1", client=client).select_move(make_obs(["3C", "QC"])) == "3C"
+
+
+def test_empty_content_uses_json_card_from_reasoning() -> None:
+    message = SimpleNamespace(content="", reasoning='Weighing 2C against QC.\n{"card": "QC"}')
+    client = FakeClient()
+    client._reply = message  # type: ignore[assignment]
+    assert GroqICLBot("P1", client=client).select_move(make_obs(["3C", "QC"])) == "QC"
+
+
+def test_api_reasoning_is_kept_for_the_log() -> None:
+    message = SimpleNamespace(content='{"card": "QC"}', reasoning="Duck under the king.")
+    client = FakeClient()
+    client._reply = message  # type: ignore[assignment]
+    bot = GroqICLBot("P1", client=client)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert bot.last_reasoning == "Duck under the king."
+
+
+def test_json_reasoning_is_kept_when_the_channel_is_empty() -> None:
+    client = FakeClient('{"card": "QC", "reasoning": "safe duck"}')
+    bot = GroqICLBot("P1", client=client)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert bot.last_reasoning == "safe duck"
+
+
+def test_single_legal_move_clears_previous_reasoning() -> None:
+    bot = GroqICLBot("P1", client=FakeClient('{"card": "QC"}'))
+    bot.last_reasoning = "stale"
+    assert bot.select_move(make_obs(["3C"])) == "3C"
+    assert bot.last_reasoning == ""
+
+
+def test_reasoning_prose_without_json_is_not_a_move() -> None:
+    message = SimpleNamespace(content="", reasoning="Maybe QC, but the table has 2C.")
+    client = FakeClient()
+    client._reply = message  # type: ignore[assignment]
     assert GroqICLBot("P1", client=client).select_move(make_obs(["3C", "QC"])) == "3C"
 
 

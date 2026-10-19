@@ -51,7 +51,7 @@ def play_deal(
         chosen = controllers[player_id].select_move(observation)
         if chosen not in observation.legal_moves:
             raise ValueError(f"{player_id} chose illegal move {chosen!r}")
-        logger.log(observation, chosen)
+        logger.log(observation, chosen, controllers[player_id].last_reasoning)
         result = engine.play_card(player_id, chosen)
         if show_play:
             print(f"  {player_id}: {chosen}", flush=True)
