@@ -1,0 +1,8 @@
+---
+alwaysApply: true
+---
+# Zasady Projektu (Hearts Engine ICL-Ready)
+1. Język: Python 3.12+. Używaj ścisłego typowania (`typing`) oraz `dataclasses` lub `pydantic`.
+2. Architektura: Silnik gry (`src/engine/`) musi być w 100% odseparowany od I/O (zero użycia `print()` lub `input()` wewnątrz silnika). Silnik działa jako czysta maszyna stanów.
+3. Zwięzłość: Odpowiadaj na czacie maksymalnie krótko. Nie tłumacz wygenerowanego kodu, chyba że zostaniesz o to poproszony.
+4. Testy: Każda zmiana w logice wymaga testów w `pytest`. Uruchamiaj `pytest` samodzielnie w terminalu po napisaniu kodu.
