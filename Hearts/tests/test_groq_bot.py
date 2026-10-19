@@ -69,6 +69,12 @@ def write_trajectories(path: Path, n: int) -> None:
         handle.write(json.dumps(forced) + "\n")
 
 
+@pytest.fixture(autouse=True)
+def _no_project_exchange_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests from appending to logs/groq_exchanges.jsonl."""
+    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_EXCHANGE_LOG_PATH", None)
+
+
 def test_is_player_controller() -> None:
     assert isinstance(GroqICLBot("P1", client=FakeClient()), PlayerController)
 
@@ -118,6 +124,44 @@ def test_json_reasoning_is_kept_when_the_channel_is_empty() -> None:
     bot = GroqICLBot("P1", client=client)
     assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
     assert bot.last_reasoning == "safe duck"
+
+
+def test_exchange_log_stores_prompt_and_reply(tmp_path: Path) -> None:
+    path = tmp_path / "groq_exchanges.jsonl"
+    client = FakeClient('{"card": "QC", "reasoning": "safe duck"}')
+    bot = GroqICLBot("P1", client=client, exchange_log_path=path)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["player_id"] == "P1"
+    assert record["model"] == DEFAULT_MODEL
+    assert [m["role"] for m in record["messages"]] == ["system", "user"]
+    assert "Hearts" in record["messages"][0]["content"]
+    assert "Legal" in record["messages"][1]["content"]
+    assert record["response"] == {
+        "content": '{"card": "QC", "reasoning": "safe duck"}',
+        "reasoning": "",
+    }
+    assert record["chosen_move"] == "QC"
+    assert record["error"] is None
+
+
+def test_exchange_log_stores_api_errors(tmp_path: Path) -> None:
+    path = tmp_path / "groq_exchanges.jsonl"
+    client = FakeClient(error=RuntimeError("rate limited"))
+    bot = GroqICLBot("P1", client=client, exchange_log_path=path)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "3C"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["response"] is None
+    assert record["error"] == "rate limited"
+    assert record["messages"][1]["role"] == "user"
+
+
+def test_single_legal_move_does_not_log_an_exchange(tmp_path: Path) -> None:
+    path = tmp_path / "groq_exchanges.jsonl"
+    bot = GroqICLBot("P1", client=FakeClient('{"card": "3C"}'), exchange_log_path=path)
+    assert bot.select_move(make_obs(["3C"])) == "3C"
+    assert not path.exists()
 
 
 def test_single_legal_move_clears_previous_reasoning() -> None:

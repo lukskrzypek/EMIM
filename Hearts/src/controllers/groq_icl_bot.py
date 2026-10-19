@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "openai/gpt-oss-20b"
 DEFAULT_API_KEY_PATH = Path(__file__).resolve().parents[2] / "groq_api_key.txt"
+DEFAULT_EXCHANGE_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_exchanges.jsonl"
 
 _CARD_RE = re.compile(r"\b[2-9TJQKA][CDSH]\b")
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
@@ -185,6 +186,7 @@ class GroqICLBot(PlayerController):
         max_tokens: int = 512,
         api_key: str | None = None,
         api_key_path: str | Path | None = None,
+        exchange_log_path: str | Path | None = None,
         client: Any | None = None,
         seed: int | None = None,
     ) -> None:
@@ -199,6 +201,9 @@ class GroqICLBot(PlayerController):
         self._max_tokens = max_tokens
         self._api_key = api_key
         self._api_key_path = Path(api_key_path) if api_key_path is not None else DEFAULT_API_KEY_PATH
+        # None means the project log. Tests can point the default at nothing.
+        chosen_log = DEFAULT_EXCHANGE_LOG_PATH if exchange_log_path is None else exchange_log_path
+        self._exchange_log_path = Path(chosen_log) if chosen_log else None
         self._client = client
         self._rng = random.Random(seed)
 
@@ -256,17 +261,17 @@ class GroqICLBot(PlayerController):
             return legal[0]
 
         client = self._get_client()
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": self.build_messages(observation),
+            "temperature": self._temperature,
+            "max_tokens": self._max_tokens,
+        }
+        # gpt-oss writes a long chain of thought first. "low" leaves room
+        # for the JSON answer in content. The thought stays on message.reasoning.
+        if "gpt-oss" in self.model:
+            request["reasoning_effort"] = "low"
         try:
-            request: dict[str, Any] = {
-                "model": self.model,
-                "messages": self.build_messages(observation),
-                "temperature": self._temperature,
-                "max_tokens": self._max_tokens,
-            }
-            # gpt-oss writes a long chain of thought first. "low" leaves room
-            # for the JSON answer in content. The thought stays on message.reasoning.
-            if "gpt-oss" in self.model:
-                request["reasoning_effort"] = "low"
             response = client.chat.completions.create(**request)
             message = response.choices[0].message
             text = reply_text(message)
@@ -274,6 +279,7 @@ class GroqICLBot(PlayerController):
         except Exception as exc:  # network / API / quota errors must not stop the game
             logger.warning("Groq request failed (%s); playing first legal move", exc)
             self.last_reasoning = f"request failed: {exc}"
+            self._log_exchange(request, None, legal[0], error=str(exc))
             return legal[0]
 
         move = parse_card(text, legal)
@@ -281,5 +287,43 @@ class GroqICLBot(PlayerController):
             logger.warning("Illegal or unparsable Groq reply %r; playing first legal move", text)
             if not self.last_reasoning:
                 self.last_reasoning = text.strip()
-            return legal[0]
+            move = legal[0]
+        self._log_exchange(request, message, move)
         return move
+
+    def _log_exchange(
+        self,
+        request: dict[str, Any],
+        message: Any | None,
+        chosen_move: str,
+        *,
+        error: str | None = None,
+    ) -> None:
+        """Append the prompt sent to Groq and the raw reply. Never includes the API key."""
+        if self._exchange_log_path is None:
+            return
+        if message is None:
+            response: dict[str, str] | None = None
+        elif isinstance(message, str):
+            response = {"content": message, "reasoning": ""}
+        else:
+            content = getattr(message, "content", None) or ""
+            reasoning = getattr(message, "reasoning", None) or ""
+            response = {
+                "content": content if isinstance(content, str) else str(content),
+                "reasoning": reasoning if isinstance(reasoning, str) else str(reasoning),
+            }
+        record = {
+            "player_id": self.player_id,
+            "model": request.get("model", self.model),
+            "messages": request.get("messages", []),
+            "response": response,
+            "chosen_move": chosen_move,
+            "error": error,
+        }
+        try:
+            self._exchange_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._exchange_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            logger.warning("Could not write Groq exchange log (%s)", exc)
