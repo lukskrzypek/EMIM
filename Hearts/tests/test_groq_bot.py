@@ -10,7 +10,13 @@ from typing import Any
 import pytest
 
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import DEFAULT_MODEL, GroqICLBot, parse_card, read_api_key
+from controllers.groq_icl_bot import (
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MODEL,
+    GroqICLBot,
+    parse_card,
+    read_api_key,
+)
 from engine.game import PlayerObservation
 
 
@@ -75,6 +81,18 @@ def _no_project_exchange_log(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_EXCHANGE_LOG_PATH", None)
 
 
+@pytest.fixture(autouse=True)
+def _no_project_illegal_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests from appending to logs/groq_illegal_moves.jsonl."""
+    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_ILLEGAL_LOG_PATH", None)
+
+
+@pytest.fixture(autouse=True)
+def _no_project_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep unit tests away from logs/memory_*.txt."""
+    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_MEMORY_DIR", tmp_path / "default_mem")
+
+
 def test_is_player_controller() -> None:
     assert isinstance(GroqICLBot("P1", client=FakeClient()), PlayerController)
 
@@ -86,10 +104,17 @@ def test_default_model() -> None:
 def test_returns_card_from_json_reply() -> None:
     client = FakeClient('{"card": "QC"}')
     bot = GroqICLBot("P1", client=client)
-    assert bot.select_move(make_obs(["3C", "QC", "AC"])) == "QC"
+    legal = ["3C", "QC", "AC"]
+    assert bot.select_move(make_obs(legal)) == "QC"
     assert len(client.calls) == 1
-    assert client.calls[0]["model"] == DEFAULT_MODEL
-    assert client.calls[0]["reasoning_effort"] == "low"
+    call = client.calls[0]
+    assert call["model"] == DEFAULT_MODEL
+    assert call["reasoning_effort"] == "low"
+    assert call["max_tokens"] == DEFAULT_MAX_TOKENS
+    schema = call["response_format"]["json_schema"]
+    assert schema["strict"] is True
+    assert schema["schema"]["properties"]["card"]["enum"] == legal
+    assert schema["schema"]["additionalProperties"] is False
 
 
 def test_single_legal_move_skips_api() -> None:
@@ -233,17 +258,28 @@ def test_prompt_contains_rules_state_examples_and_legal_reminder(tmp_path: Path)
 
     system, user = client.calls[0]["messages"]
     assert system["role"] == "system" and user["role"] == "user"
-    assert "Hearts" in system["content"] and "Queen of Spades" in system["content"]
+    assert "Hearts" in system["content"] and "QS" in system["content"]
     assert "P1" in system["content"]
 
     content = user["content"]
     assert obs.to_icl_prompt() in content
-    assert "ONLY from this list of legal moves: 3C, QC, AC" in content
+    assert "### Current state (you are P1)" in content
+    assert "Choose exactly one card" not in content
+    assert "Reply with only JSON" not in content
     # Last two informative examples only; forced move skipped.
     assert "EXAMPLE-4" in content and "EXAMPLE-3" in content
     assert "EXAMPLE-2" not in content
     assert "FORCED-EXAMPLE" not in content
     assert 'Answer: {"card": "9C"}' in content
+
+
+def test_num_examples_defaults_to_zero(tmp_path: Path) -> None:
+    path = tmp_path / "trajectories.jsonl"
+    write_trajectories(path, 5)
+    bot = GroqICLBot("P1", trajectories_path=path, client=FakeClient())
+    content = bot.build_messages(make_obs(["3C", "QC"]))[1]["content"]
+    assert "Example" not in content
+    assert "EXAMPLE-" not in content
 
 
 def test_random_example_selection_is_seeded(tmp_path: Path) -> None:
@@ -289,3 +325,187 @@ def test_invalid_example_selection_rejected() -> None:
 )
 def test_parse_card(text: str, expected: str | None) -> None:
     assert parse_card(text, ["3C", "QC", "AC"]) == expected
+
+
+def test_truncated_json_keeps_the_card_key_not_the_dump() -> None:
+    text = '{"card": "3C", "reasoning": "duck", "memory": "Hand: QH TS history T1 P0:5C'
+    assert parse_card(text, ["3C", "5C", "QC"]) == "3C"
+
+
+def test_truncated_illegal_card_key_is_not_replaced_by_a_later_token() -> None:
+    text = '{"card": "QH", "memory": "TS 3C'
+    assert parse_card(text, ["3C", "5C"]) is None
+
+
+def test_truncated_object_without_a_card_key_is_not_scraped() -> None:
+    text = '{"reasoning": "duck", "memory": "Hand: QH TS 3C'
+    assert parse_card(text, ["3C", "5C", "QC"]) is None
+
+
+def test_select_move_plays_card_from_truncated_json() -> None:
+    reply = '{"card": "5C", "reasoning": "duck", "memory": "Hand: QH TS 3C'
+    client = FakeClient(reply)
+    assert GroqICLBot("P1", client=client).select_move(make_obs(["3C", "5C", "QC"])) == "5C"
+
+
+def test_truncated_card_key_in_reasoning_is_a_move() -> None:
+    message = SimpleNamespace(content="", reasoning='Weighing.\n{"card": "5C", "memory": "QH TS')
+    client = FakeClient()
+    client._reply = message  # type: ignore[assignment]
+    assert GroqICLBot("P1", client=client).select_move(make_obs(["3C", "5C", "QC"])) == "5C"
+
+
+def test_truncated_illegal_card_key_is_logged(tmp_path: Path) -> None:
+    path = tmp_path / "groq_illegal_moves.jsonl"
+    reply = '{"card": "QH", "memory": "TS 3C'
+    bot = GroqICLBot("P1", client=FakeClient(reply), illegal_log_path=path)
+    assert bot.select_move(make_obs(["3C", "5C"])) == "3C"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["kind"] == "illegal"
+    assert record["attempted_card"] == "QH"
+    assert record["fallback_move"] == "3C"
+
+
+def test_memory_is_injected_into_prompt(tmp_path: Path) -> None:
+    mem = tmp_path / "mem.txt"
+    mem.write_text("P0 void in hearts", encoding="utf-8")
+    bot = GroqICLBot("P1", client=FakeClient(), memory_path=mem, max_memory_chars=600)
+    content = bot.build_messages(make_obs(["3C", "QC"]))[1]["content"]
+    assert "### Your Memory Pad (17/600 chars)\nP0 void in hearts" in content
+    assert content.index("### Your Memory Pad") < content.index("### Current state")
+
+
+def test_missing_memory_shows_empty(tmp_path: Path) -> None:
+    bot = GroqICLBot("P1", client=FakeClient(), memory_path=tmp_path / "none.txt")
+    assert bot.read_memory() == "(empty)"
+    assert "(empty)" in bot.build_messages(make_obs(["3C", "QC"]))[1]["content"]
+
+
+def test_default_memory_path_is_per_player(tmp_path: Path) -> None:
+    bot = GroqICLBot("P1", client=FakeClient('{"card": "QC", "memory": "hi"}'))
+    bot.select_move(make_obs(["3C", "QC"]))
+    assert (tmp_path / "default_mem" / "memory_P1.txt").read_text(encoding="utf-8") == "hi"
+
+
+@pytest.mark.parametrize("disabled", ["", False])
+def test_memory_can_be_disabled(disabled: Any, tmp_path: Path) -> None:
+    bot = GroqICLBot("P1", client=FakeClient('{"card": "QC", "memory": "hi"}'), memory_path=disabled)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert bot.read_memory() == "(empty)"
+    assert not (tmp_path / "default_mem").exists()
+
+
+def test_model_overwrites_memory(tmp_path: Path) -> None:
+    mem = tmp_path / "mem.txt"
+    mem.write_text("old", encoding="utf-8")
+    client = FakeClient('{"card": "QC", "reasoning": "x", "memory": "nowa notatka"}')
+    bot = GroqICLBot("P1", client=client, memory_path=mem)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert mem.read_text(encoding="utf-8") == "nowa notatka"
+
+
+def test_null_memory_keeps_file(tmp_path: Path) -> None:
+    mem = tmp_path / "mem.txt"
+    mem.write_text("old", encoding="utf-8")
+    client = FakeClient('{"card": "QC", "memory": null}')
+    bot = GroqICLBot("P1", client=client, memory_path=mem)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert mem.read_text(encoding="utf-8") == "old"
+
+
+def test_long_memory_is_trimmed(tmp_path: Path) -> None:
+    mem = tmp_path / "sub" / "mem.txt"
+    client = FakeClient(json.dumps({"card": "QC", "memory": "  " + "a" * 50 + "  "}))
+    bot = GroqICLBot("P1", client=client, memory_path=mem, max_memory_chars=10)
+    bot.select_move(make_obs(["3C", "QC"]))
+    assert mem.read_text(encoding="utf-8") == "a" * 10
+    mem.write_text("0123456789ABCDEF", encoding="utf-8")
+    assert bot.read_memory() == "6789ABCDEF"
+
+
+def test_memory_in_reasoning_json_fallback(tmp_path: Path) -> None:
+    mem = tmp_path / "mem.txt"
+    message = SimpleNamespace(content="", reasoning='Thinking.\n{"card": "QC", "memory": "from cot"}')
+    client = FakeClient()
+    client._reply = message  # type: ignore[assignment]
+    bot = GroqICLBot("P1", client=client, memory_path=mem)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert mem.read_text(encoding="utf-8") == "from cot"
+
+
+def test_exchange_log_stores_memory_after(tmp_path: Path) -> None:
+    log = tmp_path / "log.jsonl"
+    client = FakeClient('{"card": "QC", "memory": "note"}')
+    bot = GroqICLBot("P1", client=client, exchange_log_path=log, memory_path=tmp_path / "m.txt")
+    bot.select_move(make_obs(["3C", "QC"]))
+    assert json.loads(log.read_text(encoding="utf-8"))["memory_after"] == "note"
+
+
+def test_memory_persists_for_a_new_bot(tmp_path: Path) -> None:
+    mem = tmp_path / "memory_P0.txt"
+    first = GroqICLBot(
+        "P0",
+        client=FakeClient('{"card": "QC", "memory": "P1 void C"}'),
+        memory_path=mem,
+    )
+    assert first.select_move(make_obs(["3C", "QC"], player_id="P0")) == "QC"
+    nxt = GroqICLBot("P0", client=FakeClient(), memory_path=mem)
+    assert nxt.read_memory() == "P1 void C"
+    assert "P1 void C" in nxt.build_messages(make_obs(["3C", "QC"], player_id="P0"))[1]["content"]
+
+
+def test_prompt_says_a_full_pad_can_be_edited() -> None:
+    system = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
+    assert "saved to disk" in system
+    assert "When the pad is full, edit it" in system
+
+
+def test_illegal_card_is_logged(tmp_path: Path) -> None:
+    path = tmp_path / "groq_illegal_moves.jsonl"
+    client = FakeClient('{"card": "AS", "reasoning": "dump"}')
+    bot = GroqICLBot("P1", client=client, illegal_log_path=path)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "3C"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["player_id"] == "P1"
+    assert record["kind"] == "illegal"
+    assert record["attempted_card"] == "AS"
+    assert record["legal_moves"] == ["3C", "QC"]
+    assert record["fallback_move"] == "3C"
+    assert record["error"] is None
+
+
+def test_unparsable_reply_is_logged(tmp_path: Path) -> None:
+    path = tmp_path / "groq_illegal_moves.jsonl"
+    bot = GroqICLBot("P1", client=FakeClient("I think I will pass."), illegal_log_path=path)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "3C"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["kind"] == "unparsable"
+    assert record["attempted_card"] is None
+    assert record["fallback_move"] == "3C"
+
+
+def test_api_error_is_logged(tmp_path: Path) -> None:
+    path = tmp_path / "groq_illegal_moves.jsonl"
+    client = FakeClient(error=RuntimeError("rate limited"))
+    bot = GroqICLBot("P1", client=client, illegal_log_path=path)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "3C"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["kind"] == "api"
+    assert record["reply"] is None
+    assert record["error"] == "rate limited"
+    assert record["fallback_move"] == "3C"
+
+
+def test_legal_move_does_not_log_an_illegal(tmp_path: Path) -> None:
+    path = tmp_path / "groq_illegal_moves.jsonl"
+    bot = GroqICLBot("P1", client=FakeClient('{"card": "QC"}'), illegal_log_path=path)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert not path.exists()
+
+
+def test_default_illegal_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = tmp_path / "groq_illegal_moves.jsonl"
+    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_ILLEGAL_LOG_PATH", log)
+    bot = GroqICLBot("P0", client=FakeClient('{"card": "AS"}'))
+    assert bot.select_move(make_obs(["3C", "QC"], player_id="P0")) == "3C"
+    assert json.loads(log.read_text(encoding="utf-8"))["attempted_card"] == "AS"
