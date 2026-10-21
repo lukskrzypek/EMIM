@@ -15,7 +15,7 @@ from engine.game import PlayerObservation
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "openai/gpt-oss-20b"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_API_KEY_PATH = Path(__file__).resolve().parents[2] / "groq_api_key.txt"
 DEFAULT_EXCHANGE_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_exchanges.jsonl"
 DEFAULT_ILLEGAL_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_illegal_moves.jsonl"
