@@ -4,4 +4,4 @@ __pycache__/
 logs/
 .venv/
 groq_api_key.txt
-
+.venv-gui/

@@ -88,6 +88,12 @@ def _no_project_illegal_log(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_project_api_error_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep unit tests from appending to logs/groq_api_errors.jsonl."""
+    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_API_ERROR_LOG_PATH", None)
+
+
+@pytest.fixture(autouse=True)
 def _no_project_memory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Keep unit tests away from logs/memory_*.txt."""
     monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_MEMORY_DIR", tmp_path / "default_mem")
@@ -469,6 +475,18 @@ def test_memory_persists_for_a_new_bot(tmp_path: Path) -> None:
     assert "P1 void C" in nxt.build_messages(make_obs(["3C", "QC"], player_id="P0"))[1]["content"]
 
 
+def test_user_guidelines_are_appended_only_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    base = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
+    monkeypatch.setattr("controllers.groq_icl_bot.USER_GUIDELINES", "Dump QS at the first void.")
+    with_file = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
+    assert with_file == base + "\nDump QS at the first void."
+    overridden = GroqICLBot("P1", client=FakeClient(), guidelines="Lead clubs.")
+    text = overridden.build_messages(make_obs(["3C"]))[0]["content"]
+    assert text == base + "\nLead clubs."
+    cleared = GroqICLBot("P1", client=FakeClient(), guidelines="  ")
+    assert cleared.build_messages(make_obs(["3C"]))[0]["content"] == base
+
+
 def test_prompt_says_a_full_pad_can_be_edited() -> None:
     system = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
     assert "saved to disk" in system
@@ -500,16 +518,38 @@ def test_unparsable_reply_is_logged(tmp_path: Path) -> None:
     assert record["fallback_move"] == "3C"
 
 
-def test_api_error_is_logged(tmp_path: Path) -> None:
-    path = tmp_path / "groq_illegal_moves.jsonl"
+def test_api_error_goes_to_its_own_log_not_the_illegal_move_log(tmp_path: Path) -> None:
+    illegal, api = tmp_path / "groq_illegal_moves.jsonl", tmp_path / "groq_api_errors.jsonl"
     client = FakeClient(error=RuntimeError("rate limited"))
-    bot = GroqICLBot("P1", client=client, illegal_log_path=path)
+    bot = GroqICLBot("P1", model="m/x", name="bold", client=client, illegal_log_path=illegal, api_error_log_path=api)
     assert bot.select_move(make_obs(["3C", "QC"])) == "3C"
-    record = json.loads(path.read_text(encoding="utf-8"))
-    assert record["kind"] == "api"
-    assert record["reply"] is None
-    assert record["error"] == "rate limited"
-    assert record["fallback_move"] == "3C"
+    assert not illegal.exists()
+    record = json.loads(api.read_text(encoding="utf-8"))
+    assert record["player_id"] == "P1" and record["model"] == "m/x" and record["name"] == "bold"
+    assert record["error"] == "rate limited" and record["status_code"] is None
+    assert record["legal_moves"] == ["3C", "QC"] and record["fallback_move"] == "3C"
+    assert "kind" not in record and "reply" not in record
+
+
+def test_api_error_keeps_the_http_status_and_an_illegal_reply_stays_out_of_the_api_log(tmp_path: Path) -> None:
+    illegal, api = tmp_path / "ill.jsonl", tmp_path / "api.jsonl"
+    refused = FakeClient(error=ApiError("model_not_found", 404))
+    GroqICLBot("P1", client=refused, illegal_log_path=illegal, api_error_log_path=api).select_move(make_obs(["3C", "QC"]))
+    assert json.loads(api.read_text(encoding="utf-8"))["status_code"] == 404
+
+    api.unlink()
+    GroqICLBot("P1", client=FakeClient('{"card": "AS"}'), illegal_log_path=illegal, api_error_log_path=api).select_move(
+        make_obs(["3C", "QC"])
+    )
+    assert not api.exists() and json.loads(illegal.read_text(encoding="utf-8"))["kind"] == "illegal"
+
+
+def test_default_api_error_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = tmp_path / "groq_api_errors.jsonl"
+    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_API_ERROR_LOG_PATH", log)
+    bot = GroqICLBot("P0", client=FakeClient(error=RuntimeError("boom")))
+    assert bot.select_move(make_obs(["3C", "QC"], player_id="P0")) == "3C"
+    assert json.loads(log.read_text(encoding="utf-8"))["error"] == "boom"
 
 
 def test_legal_move_does_not_log_an_illegal(tmp_path: Path) -> None:
@@ -525,3 +565,105 @@ def test_default_illegal_log_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     bot = GroqICLBot("P0", client=FakeClient('{"card": "AS"}'))
     assert bot.select_move(make_obs(["3C", "QC"], player_id="P0")) == "3C"
     assert json.loads(log.read_text(encoding="utf-8"))["attempted_card"] == "AS"
+
+
+def test_bot_name_marks_model_name_memory_file_and_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_MEMORY_DIR", tmp_path)
+    exchanges, illegal = tmp_path / "ex.jsonl", tmp_path / "ill.jsonl"
+    plain = GroqICLBot("P0", model="m/x", client=FakeClient('{"card": "QC"}'), exchange_log_path="", illegal_log_path="")
+    named = GroqICLBot(
+        "P1", model="m/x", name=" bold ", client=FakeClient('{"card": "ZZ"}'),
+        exchange_log_path=exchanges, illegal_log_path=illegal,
+    )
+    assert plain.model_name == "m/x" and plain.name == ""  # unnamed: exactly as before
+    assert named.model_name == "m/x_bold" and named.model == "m/x"  # the API still gets the model id
+    assert (tmp_path / "memory_m_x.txt").is_file() and (tmp_path / "memory_m_x_bold.txt").is_file()
+
+    named.select_move(make_obs(["3C", "QC"]))
+    assert named._label == "m/x_bold"
+    for path in (exchanges, illegal):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert record["model"] == "m/x" and record["name"] == "bold"
+    assert named.build_messages(make_obs(["3C", "QC"]))  # prompts do not mention the name
+
+
+# ----------------------------------------------------------------- other models (meta-llama ...)
+
+
+class ScriptedClient(FakeClient):
+    """Fails with the given errors first, then answers like ``FakeClient``."""
+
+    def __init__(self, reply: str, errors: list[Exception]) -> None:
+        super().__init__(reply)
+        self._errors = list(errors)
+
+    def _create(self, **kwargs: Any) -> Any:
+        if self._errors:
+            self.calls.append(kwargs)
+            raise self._errors.pop(0)
+        return super()._create(**kwargs)
+
+
+class ApiError(Exception):
+    def __init__(self, message: str, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+LLAMA = "meta-llama/llama-4-scout-17b-16e-instruct"
+
+
+def test_non_gpt_oss_model_gets_plain_json_mode_and_no_reasoning_effort() -> None:
+    client = FakeClient('Sure! ```json\n{"card": "QC", "reasoning": "duck", "memory": null}\n```')
+    bot = GroqICLBot("P1", model=LLAMA, client=client)
+    assert bot.select_move(make_obs(["3C", "QC", "AC"])) == "QC"  # the fenced JSON is understood
+    call = client.calls[0]
+    assert call["model"] == LLAMA
+    assert call["response_format"] == {"type": "json_object"}  # a strict schema is gpt-oss only
+    assert "reasoning_effort" not in call
+    assert bot.last_reasoning == "duck"
+
+
+def test_llama_reply_with_an_illegal_card_still_falls_back() -> None:
+    bot = GroqICLBot("P1", model=LLAMA, client=FakeClient('{"card": "2H"}'))
+    assert bot.select_move(make_obs(["3C", "QC"])) == "3C"
+
+
+def test_format_refused_by_the_api_is_relaxed_and_remembered() -> None:
+    refusal = ApiError("`response_format` of type `json_schema` is not supported with this model")
+    client = ScriptedClient('{"card": "QC"}', [refusal])
+    bot = GroqICLBot("P1", client=client)  # gpt-oss: starts with the strict schema
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert client.calls[0]["response_format"]["type"] == "json_schema"
+    assert client.calls[1]["response_format"] == {"type": "json_object"}
+
+    bot.select_move(make_obs(["3C", "QC"]))
+    assert client.calls[2]["response_format"] == {"type": "json_object"}  # not refused again
+
+
+def test_format_is_dropped_when_json_mode_is_refused_too() -> None:
+    errors = [ApiError("json_schema is not supported"), ApiError("json mode is not supported")]
+    client = ScriptedClient('{"card": "QC"}', errors)
+    bot = GroqICLBot("P1", client=client)  # schema -> json mode -> nothing
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert len(client.calls) == 3 and "response_format" not in client.calls[2]
+    assert not bot.last_reasoning.startswith("request failed")
+
+
+def test_token_limit_of_the_model_is_learned() -> None:
+    limit = ApiError("`max_tokens` must be less than or equal to `512`, the maximum value for ...")
+    client = ScriptedClient('{"card": "QC"}', [limit])
+    bot = GroqICLBot("P1", model=LLAMA, client=client)
+    assert bot.select_move(make_obs(["3C", "QC"])) == "QC"
+    assert [c["max_tokens"] for c in client.calls] == [DEFAULT_MAX_TOKENS, 512]
+    bot.select_move(make_obs(["3C", "QC"]))
+    assert client.calls[-1]["max_tokens"] == 512
+
+
+def test_other_api_errors_are_not_retried() -> None:
+    for error in (ApiError("rate limit, max_tokens", 429), ApiError("model_not_found", 404), ApiError("boom")):
+        client = ScriptedClient('{"card": "QC"}', [error, error, error])
+        bot = GroqICLBot("P1", model=LLAMA, client=client)
+        assert bot.select_move(make_obs(["3C", "QC"])) == "3C"  # fallback, no retry
+        assert len(client.calls) == 1
+        assert bot.last_reasoning.startswith("request failed")

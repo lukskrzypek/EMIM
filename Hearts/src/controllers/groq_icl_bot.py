@@ -15,19 +15,35 @@ from engine.game import PlayerObservation
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "openai/gpt-oss-20b"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_API_KEY_PATH = Path(__file__).resolve().parents[2] / "groq_api_key.txt"
 DEFAULT_EXCHANGE_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_exchanges.jsonl"
 DEFAULT_ILLEGAL_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_illegal_moves.jsonl"
+# Requests the API refused (quota, unknown model, rate limit ...). Replies that came back but
+# were no legal card go to the illegal-move log instead.
+DEFAULT_API_ERROR_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_api_errors.jsonl"
 DEFAULT_MEMORY_DIR = Path(__file__).resolve().parents[2] / "logs"
 
 _CARD_RE = re.compile(r"\b[2-9TJQKA][CDSH]\b")
 _CARD_KEY_RE = re.compile(r'"card"\s*:\s*"([2-9TJQKA][CDHS])"', re.IGNORECASE)
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
+_TOKEN_LIMIT_RE = re.compile(r"less than or equal to\s*`?(\d+)")
+# Words of a 400 that mean "this model does not take this response_format".
+_FORMAT_ERROR_MARKERS = (
+    "response_format",
+    "json_schema",
+    "json mode",
+    "json_object",
+    "structured output",
+    "json_validate_failed",
+    "failed to generate json",
+)
 _MAX_POOL = 500  # newest informative trajectory records kept as example candidates
 # Room for a low-effort chain of thought plus a memory pad. 512 cut the JSON
 # off inside ``memory``, after a legal ``card`` had already been written.
 DEFAULT_MAX_TOKENS = 4096
+# Optional extra instructions appended to the system prompt. Leave "" to add nothing.
+USER_GUIDELINES = ""
 
 SYSTEM_PROMPT = """\
 Expert Hearts player. Cards: rank (2-9,T,J,Q,K,A) + suit (C,D,S,H).
@@ -223,6 +239,20 @@ def decision_response_format(legal_moves: list[str]) -> dict[str, Any]:
     }
 
 
+def response_format_for(level: int, legal_moves: list[str]) -> dict[str, Any] | None:
+    """Reply constraint by strictness: 0 = strict schema, 1 = any JSON object, 2 = none.
+
+    Only the gpt-oss models take the strict schema. Other Groq models (meta-llama ...) take
+    plain JSON mode at best; the prompt asks for the same JSON either way and ``parse_card``
+    checks the card against the legal moves.
+    """
+    if level <= 0:
+        return decision_response_format(legal_moves)
+    if level == 1:
+        return {"type": "json_object"}
+    return None
+
+
 def reply_text(message: Any) -> str:
     """Text that holds the decision.
 
@@ -266,15 +296,22 @@ class GroqICLBot(PlayerController):
         api_key_path: str | Path | None = None,
         exchange_log_path: str | Path | None = None,
         illegal_log_path: str | Path | None = None,
+        api_error_log_path: str | Path | None = None,
         memory_path: str | Path | None = None,
         max_memory_chars: int = 600,
         client: Any | None = None,
         seed: int | None = None,
+        guidelines: str | None = None,
+        name: str = "",
     ) -> None:
         if example_selection not in ("last", "random"):
             raise ValueError(f"example_selection must be 'last' or 'random', got {example_selection!r}")
         self.player_id = player_id
         self.model = model
+        # Tells two bots of one model apart: it ends up in model_name (so in trajectories.jsonl),
+        # in the name of the memory file and in the exchange / illegal-move logs.
+        self.name = name.strip()
+        self._label = f"{model}_{self.name}" if self.name else model
         self.trajectories_path = Path(trajectories_path) if trajectories_path else None
         self._num_examples = num_examples
         self._selection: Literal["last", "random"] = example_selection
@@ -287,9 +324,12 @@ class GroqICLBot(PlayerController):
         self._exchange_log_path = Path(chosen_log) if chosen_log else None
         chosen_illegal = DEFAULT_ILLEGAL_LOG_PATH if illegal_log_path is None else illegal_log_path
         self._illegal_log_path = Path(chosen_illegal) if chosen_illegal else None
-        # None means logs/memory_<model>.txt. "" or False keeps the pad off disk.
+        chosen_api = DEFAULT_API_ERROR_LOG_PATH if api_error_log_path is None else api_error_log_path
+        self._api_error_log_path = Path(chosen_api) if chosen_api else None
+        # None means logs/memory_<model>.txt (``..._<name>.txt`` for a named bot).
+        # "" or False keeps the pad off disk.
         chosen_memory = (
-            DEFAULT_MEMORY_DIR / memory_filename(model) if memory_path is None else memory_path
+            DEFAULT_MEMORY_DIR / memory_filename(self._label) if memory_path is None else memory_path
         )
         self._memory_path = Path(chosen_memory) if chosen_memory else None
         self._max_memory_chars = max_memory_chars
@@ -298,12 +338,16 @@ class GroqICLBot(PlayerController):
             self._memory_path.parent.mkdir(parents=True, exist_ok=True)
             self._memory_path.touch(exist_ok=True)
         self._client = client
+        # How strictly the reply is constrained; relaxed when the API refuses (see ``_create``).
+        self._format_level = 0 if "gpt-oss" in model else 1
         self._rng = random.Random(seed)
+        # None uses USER_GUIDELINES; "" turns the extra instructions off.
+        self._guidelines = USER_GUIDELINES if guidelines is None else guidelines
 
     @property
     def model_name(self) -> str:  # type: ignore[override]
-        """Model id, saved with every logged move."""
-        return self.model
+        """Model id (``<model>_<name>`` for a named bot), saved with every logged move."""
+        return self._label
 
     # ------------------------------------------------------------------ API
 
@@ -336,6 +380,9 @@ class GroqICLBot(PlayerController):
         parts.append("### Current state (you are " + observation.player_id + ")")
         parts.append(observation.to_icl_prompt())
         system = SYSTEM_PROMPT + f"\n\nYou are player {self.player_id}."
+        extra = self._guidelines.strip()
+        if extra:
+            system += "\n" + extra
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": "\n\n".join(parts)},
@@ -361,14 +408,16 @@ class GroqICLBot(PlayerController):
             "messages": self.build_messages(observation),
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
-            "response_format": decision_response_format(legal),
         }
+        response_format = response_format_for(self._format_level, legal)
+        if response_format is not None:
+            request["response_format"] = response_format
         # gpt-oss writes a long chain of thought first. "low" leaves room
         # for the JSON answer in content. The thought stays on message.reasoning.
         if "gpt-oss" in self.model:
             request["reasoning_effort"] = "low"
         try:
-            response = client.chat.completions.create(**request)
+            response = self._create(client, request, legal)
             message = response.choices[0].message
             text = reply_text(message)
             self.last_reasoning = decision_reasoning(message, text)
@@ -376,12 +425,7 @@ class GroqICLBot(PlayerController):
             logger.warning("Groq request failed (%s); playing first legal move", exc)
             self.last_reasoning = f"request failed: {exc}"
             self._log_exchange(request, None, legal[0], error=str(exc))
-            self._log_illegal(
-                kind="api",
-                legal_moves=legal,
-                fallback_move=legal[0],
-                error=str(exc),
-            )
+            self._log_api_error(exc, legal, legal[0])
             return legal[0]
 
         memory = _json_memory(text)
@@ -405,6 +449,41 @@ class GroqICLBot(PlayerController):
         self._log_exchange(request, message, move)
         return move
 
+    def _create(self, client: Any, request: dict[str, Any], legal: list[str]) -> Any:
+        """Send ``request``; a 400 about the token limit or the response format is fixed and retried.
+
+        Models differ: meta-llama has no strict JSON schema, some models cap ``max_tokens``.
+        What the API taught us is remembered, so the next move is not refused again.
+        """
+        for _ in range(3):
+            try:
+                return client.chat.completions.create(**request)
+            except Exception as exc:
+                if not self._relax(request, exc, legal):
+                    raise
+        return client.chat.completions.create(**request)
+
+    def _relax(self, request: dict[str, Any], exc: Exception, legal: list[str]) -> bool:
+        """Adapt ``request`` to a model limit named in ``exc``. ``False`` if it is another error."""
+        if getattr(exc, "status_code", 400) != 400:
+            return False
+        message = str(exc)
+        lowered = message.lower()
+        limit = _TOKEN_LIMIT_RE.search(message)
+        if "max_tokens" in lowered and limit is not None:
+            allowed = int(limit.group(1))
+            if 0 < allowed < request["max_tokens"]:
+                self._max_tokens = request["max_tokens"] = allowed
+                return True
+        if self._format_level < 2 and any(marker in lowered for marker in _FORMAT_ERROR_MARKERS):
+            self._format_level += 1
+            request.pop("response_format", None)
+            relaxed = response_format_for(self._format_level, legal)
+            if relaxed is not None:
+                request["response_format"] = relaxed
+            return True
+        return False
+
     def read_memory(self) -> str:
         """Last ``max_memory_chars`` of the scratchpad, or ``(empty)`` if there is no file."""
         if self._memory_path is None or not self._memory_path.is_file():
@@ -424,6 +503,26 @@ class GroqICLBot(PlayerController):
         self._memory_path.parent.mkdir(parents=True, exist_ok=True)
         self._memory_path.write_text(text, encoding="utf-8")
 
+    def _log_api_error(self, exc: Exception, legal_moves: list[str], fallback_move: str) -> None:
+        """Append a request the API refused (no reply to judge, unlike the illegal-move log)."""
+        if self._api_error_log_path is None:
+            return
+        record = {
+            "player_id": self.player_id,
+            "model": self.model,
+            "name": self.name,
+            "status_code": getattr(exc, "status_code", None),
+            "error": str(exc),
+            "legal_moves": legal_moves,
+            "fallback_move": fallback_move,
+        }
+        try:
+            self._api_error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._api_error_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError as log_exc:
+            logger.warning("Could not write Groq API-error log (%s)", log_exc)
+
     def _log_illegal(
         self,
         *,
@@ -434,12 +533,13 @@ class GroqICLBot(PlayerController):
         attempted_card: str | None = None,
         error: str | None = None,
     ) -> None:
-        """Append an API failure or a reply that was not a legal card."""
+        """Append a reply that was not a legal card (``illegal`` or ``unparsable``)."""
         if self._illegal_log_path is None:
             return
         record = {
             "player_id": self.player_id,
             "model": self.model,
+            "name": self.name,
             "kind": kind,
             "reply": reply,
             "attempted_card": attempted_card,
@@ -480,6 +580,7 @@ class GroqICLBot(PlayerController):
         record = {
             "player_id": self.player_id,
             "model": request.get("model", self.model),
+            "name": self.name,
             "messages": request.get("messages", []),
             "response": response,
             "chosen_move": chosen_move,

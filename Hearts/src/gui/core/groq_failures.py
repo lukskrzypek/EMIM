@@ -1,0 +1,65 @@
+"""Recognises Groq API failures that the bot hides behind a fallback move.
+
+``GroqICLBot`` catches every API error and plays the first legal card, leaving
+``last_reasoning == "request failed: <error>"``. The GUI reads that text to stop
+a game that cannot go on (no tokens, no access) instead of letting a bot play blindly.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+FAILURE_PREFIX = "request failed:"  # what GroqICLBot writes into last_reasoning
+
+FailureKind = Literal["tokens", "access", "rate"]
+
+# Daily or monetary limits: waiting a minute does not help.
+_TOKEN_MARKERS = (
+    "per day", "(tpd)", "(rpd)", "insufficient_quota", "exceeded your current quota",
+    "quota", "out of tokens", "no tokens",
+)  # not "billing": per-minute errors also point to the billing page
+# Wrong key / no permission / unknown model: every move would fail the same way.
+_ACCESS_MARKERS = (
+    "error code: 401", "error code: 403", "error code: 404", "invalid_api_key",
+    "model_not_found", "does not exist or you do not have access", "permission",
+    "organization_restricted", "model_permission_blocked",
+)
+# Short-lived limits (per minute): later moves may work again.
+_RATE_MARKERS = ("rate limit", "rate_limit", "error code: 429", "per minute", "(tpm)", "(rpm)")
+
+
+@dataclass(frozen=True)
+class GroqFailure:
+    kind: FailureKind
+    message: str  # the API's own text, without the "request failed:" prefix
+
+    @property
+    def fatal(self) -> bool:
+        return self.kind != "rate"
+
+
+HEADLINES: dict[str, str] = {
+    "tokens": "Skończyły się tokeny Groq",
+    "access": "Brak dostępu do modelu Groq",
+}
+REASONS: dict[str, str] = {
+    "tokens": "wyczerpany limit tokenów (dzienny lub na koncie)",
+    "access": "model jest niedostępny dla tego klucza API (zła nazwa modelu, klucz albo uprawnienia)",
+}
+
+
+def classify_failure(reasoning: str | None) -> GroqFailure | None:
+    """``None`` for a normal move; otherwise what went wrong with the request."""
+    text = (reasoning or "").strip()
+    if not text.lower().startswith(FAILURE_PREFIX):
+        return None
+    message = text[len(FAILURE_PREFIX):].strip()
+    low = message.lower()
+    if any(marker in low for marker in _TOKEN_MARKERS):
+        return GroqFailure("tokens", message)
+    if any(marker in low for marker in _ACCESS_MARKERS):
+        return GroqFailure("access", message)
+    if any(marker in low for marker in _RATE_MARKERS):
+        return GroqFailure("rate", message)
+    return None

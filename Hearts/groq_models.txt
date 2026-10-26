@@ -1,0 +1,15 @@
+# Modele Groq dostępne w lobby - jeden model w linii.
+# Żeby dodać model, dopisz jego identyfikator w nowej linii i wróć do lobby
+# (lista odświeża się przy powrocie do menu albo po ponownym uruchomieniu).
+# Linie zaczynające się od # i puste linie są pomijane.
+# Modele, które widzi Twój klucz, sprawdzisz tak:
+#   .\.venv-gui\Scripts\python.exe check_models.py
+# Nadają się tylko modele czatowe. "llama-prompt-guard" to klasyfikatory (nie odpowiadają
+# kartą), "whisper" i "orpheus" to dźwięk.
+openai/gpt-oss-120b
+openai/gpt-oss-20b
+qwen/qwen3.8-27b
+# Modele meta-llama czatowe (llama-3.x, llama-4-*) nie są dostępne dla klucza użyty
+# przy ostatnim sprawdzeniu (błąd 404 model_not_found). Odkomentuj, jeśli je dostaniesz:
+# llama-3.3-70b-versatile
+# meta-llama/llama-4-scout-17b-16e-instruct

@@ -1,71 +1,104 @@
 # Hearts (Kierki)
 
-Silnik jednego rozdania kierków (2–5 graczy) i trzy kontrolery: człowiek w konsoli, bot heurystyczny z Monte Carlo oraz bot LLM (`GroqICLBot`). Zasady są w `SPEC.md`. Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
+Jedno rozdanie kierków (2–5 graczy): człowiek, bot heurystyczny (`SmartHeartsBot`) i bot LLM (`GroqICLBot`), w oknie albo w konsoli. Zasady są w `SPEC.md`. Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
 
-Wymagany Python 3.12+.
+## Szybki start
 
-## Uruchomienie
+Polecenia wykonuj w folderze `Hearts`.
 
-STWÓRZ PLIK groq_api_key.txt bezpośrednio w folderze projektu i wklej do niego swój klucz
+### Co pobrać
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python main.py
-```
-
-`main.py` pyta o liczbę graczy (2–5) i o kontroler przy każdym miejscu: człowiek, `SmartHeartsBot` albo `GroqICLBot`. Gdy przy stole jest człowiek, gra się jedno rozdanie. Gdy same boty, program pyta o liczbę partii: przy jednej wypisuje ręce i kolejne zagrania, przy wielu — wynik każdego rozdania i podsumowanie serii. Każdy ruch (kontekst, legalne karty, wybrana karta, uzasadnienie) dopisywany jest do `logs/trajectories.jsonl`.
-
-`pytest` jest w `requirements.txt`. Pakiet `groq` jest potrzebny tylko wtedy, gdy ktoś przy stole jest `GroqICLBot`. Silnik, `SmartHeartsBot` i testy działają bez SDK i bez klucza.
+- **Python 3.12+** z [python.org](https://www.python.org/downloads/) (zaznacz „Add python.exe to PATH”). Okno wymaga Pythona z python.org, nie z MSYS2.
+- **Biblioteki** (jednorazowo):
 
 ```powershell
-python -m pytest
+python -m venv .venv-gui
+.\.venv-gui\Scripts\python.exe -m pip install -r requirements-gui.txt
 ```
+
+To `groq`, `PySide6`, `pytest` i `pytest-qt`. Sam `main.py` wystarczy z `pip install -r requirements.txt` (`groq`, `pytest`). Silnik i `SmartHeartsBot` działają bez tych pakietów.
+
+- **Klucz Groq** — tylko dla `GroqICLBot`. Darmowe konto na [console.groq.com](https://console.groq.com/keys), klucz `gsk_...`.
+
+### Jak uruchomić
+
+```powershell
+.\.venv-gui\Scripts\python.exe gui_main.py
+.\.venv-gui\Scripts\python.exe main.py
+```
+
+W lobby wybierz graczy i kliknij „Rozpocznij grę”. Bez `groq_api_key.txt` bot Groq jest niedostępny, reszta działa. Testy: `.\.venv-gui\Scripts\python.exe -m pytest` (bez PySide6 i `pytest-qt` testy GUI są pomijane).
+
+### Ustawienia
+
+| Co | Gdzie |
+|---|---|
+| Klucz API | `groq_api_key.txt` — pierwsza niepusta linia (`gsk_...`), cudzysłowy na brzegach są obcinane. Plik jest w `.gitignore`. Zmienna `GROQ_API_KEY` nie jest czytana. |
+| Modele w lobby | `groq_models.txt`, jeden identyfikator w linii (`#` pomija linię). Po zmianie wróć do lobby. |
+| Wytyczne bota Groq | lobby, pole „wytyczne startowe”, do 100 znaków, najlepiej po angielsku. Puste = `USER_GUIDELINES` w `src/controllers/groq_icl_bot.py`. |
+| Gracze, rozdania, tempo | lobby i ekran gry; zostają między uruchomieniami. |
+
+Nadają się modele czatowe. `llama-prompt-guard` to klasyfikatory i nie zagrają. `404 model_not_found` znaczy, że klucz nie widzi modelu:
+
+```powershell
+.\.venv-gui\Scripts\python.exe check_models.py
+```
+
+## Konsola
+
+`main.py` pyta o liczbę graczy (2–5) i kontroler na każdym miejscu. Z człowiekiem przy stole jest jedno rozdanie. Same boty: program pyta o liczbę partii (jedna wypisuje ręce i zagrania, wiele — wynik każdego rozdania i podsumowanie). `0` zamiast liczby graczy uruchamia ocenę z logu.
+
+Każdy ruch trafia do `logs/trajectories.jsonl` (kontekst, legalne karty, karta, uzasadnienie). Pole `model` to id LLM, `human` albo `smart_bot`.
 
 ## Kontrolery
 
 | Kontroler | Zachowanie |
 |---|---|
-| `HumanCLIController` | Czyści konsolę między turami. Gracz podaje indeks albo kod karty (`0` lub `2C`). |
-| `SmartHeartsBot` | Heurystyki plus 40 losowań niewidocznych rąk (`num_samples`). Wybiera kartę o najniższej średniej karze. Bez sieci. |
+| `HumanCLIController` | Czyści konsolę między turami. Indeks albo kod karty (`0` lub `2C`). |
+| `SmartHeartsBot` | Heurystyki i 40 losowań niewidocznych rąk (`num_samples`). Karta o najniższej średniej karze. Bez sieci. |
 | `GroqICLBot` | Jedno zapytanie do Groq na ruch, gdy legalnych kart jest więcej niż jedna. |
 
-## Klucz API Groq
+## GroqICLBot
 
-Klucz bierze się z pliku `groq_api_key.txt` w katalogu projektu (plik jest w `.gitignore`). Liczy się pierwsza niepusta linia; cudzysłowy na brzegach są obcinane.
+Domyślny model: `openai/gpt-oss-120b`. Dla `gpt-oss` jest `reasoning_effort="low"` i ścisły JSON (`card` z listy legalnych, `reasoning`, `memory`). Pozostałe modele dostają zwykły tryb JSON; odpowiedź w bloku ` ```json ` też jest czytana. Gdy API odrzuci format (400) albo limit `max_tokens`, bot łagodzi wymaganie albo obniża limit (najwyżej dwa ponowienia na ruch) i zapamiętuje to na kolejne ruchy.
 
-```text
-gsk_...
-```
+- Jedna legalna karta jest grana od razu.
+- Błąd API, pusta odpowiedź albo karta spoza listy: pierwsza legalna karta. Odrzucenie przez API → `logs/groq_api_errors.jsonl`. Odpowiedź, która nie jest legalną kartą → `logs/groq_illegal_moves.jsonl`.
+- Pełne zapytanie i surowa odpowiedź → `logs/groq_exchanges.jsonl` (bez klucza).
+- Few-shot jest wyłączony (`num_examples=0`). Przykłady z `logs/trajectories.jsonl` dokładają się przez `num_examples` (ostatnie rekordy albo `example_selection="random"`). Do promptu wchodzą tylko rekordy z więcej niż jedną kartą legalną.
 
-Zmienna środowiskowa `GROQ_API_KEY` nie jest czytana. `GroqICLBot` zawsze przekazuje do SDK klucz z pliku (albo z argumentu `api_key=`). Brak pliku albo pusta treść kończy się `RuntimeError` w momencie pierwszego zapytania.
+Pusty albo brakujący klucz kończy się `RuntimeError` przy pierwszym zapytaniu.
 
-## `GroqICLBot`
+### Pamięć
 
-Domyślny model to `openai/gpt-oss-120b`. Dla modeli `gpt-oss` ustawiane jest `reasoning_effort="low"`. Odpowiedź jest wymuszana schematem JSON: `card` musi być jedną z kart legalnych, plus `reasoning` i `memory`.
+Przy ruchu model dostaje `logs/memory_<model>.txt` (`/` i inne znaki niedozwolone w nazwie → `_`) i może nadpisać plik polem `memory`. `null` albo pusty string nic nie zmienia. Zapis i odczyt mają najwyżej 600 znaków. Wyłączenie: `memory_path=""`.
 
-```python
-from controllers.groq_icl_bot import GroqICLBot
+W oknie ten sam model może usiąść kilka razy. Każde miejsce poza jednym potrzebuje nazwy (do 10 znaków): plik to wtedy `logs/memory_<model>_<nazwa>.txt`, a w logu pole `model` ma postać `<model>_<nazwa>`, więc raport liczy je osobno.
 
-bot = GroqICLBot("P1", trajectories_path="logs/trajectories.jsonl")
-move = bot.select_move(observation)
-```
+## Ocena jakości
 
-- Jedna legalna karta jest grana od razu, bez zapytania.
-- Błąd API, pusta odpowiedź albo karta spoza listy legalnych: bot gra pierwszą legalną kartę. Taki przypadek trafia do `logs/groq_illegal_moves.jsonl`.
-- Few-shot jest wyłączony (`num_examples=0`). Żeby dołożyć przykłady z `logs/trajectories.jsonl`, podaj `num_examples` (ostatnie rekordy, albo losowe przez `example_selection="random"`). Do promptu wchodzą tylko rekordy z więcej niż jedną kartą legalną.
-- Pełne zapytanie i surowa odpowiedź (`content`, `reasoning`) są dopisywane do `logs/groq_exchanges.jsonl`. Klucz API do tego pliku nie trafia.
+Konsola: `0` przy pytaniu o liczbę graczy. Okno: zakładka „Jakość” liczy ruch przed zagraniem; raport w lobby liczy cały `logs/trajectories.jsonl` (ten sam tekst co tryb `0`).
 
-### Notatnik (`memory`)
+Dla każdego ruchu odtwarzany jest stan rozdania (kier = 1 pkt, dama pik = 13 pkt) i wychodzi poprawność oraz agresywność (0–100). Ruchy z jedną legalną kartą nie wchodzą do średnich. Pomijani gracze: `IGNORED_PLAYERS` na początku `main.py`, domyślnie `("human", "smart_bot")`. Raport używa domyślnych parametrów ewaluatora; parametry z okna obowiązują tylko w bieżącej sesji.
 
-Przy każdym ruchu model dostaje treść pliku `logs/memory_<model>.txt` (np. `memory_openai_gpt-oss-120b.txt`; znaki `/` i inne niedozwolone w nazwie pliku są zamieniane na `_`) i może ją nadpisać polem `memory` w JSON. Każdy model ma własny plik, wspólny dla wszystkich miejsc przy stole. `null` albo pusty string zostawia plik bez zmian. Zapis jest obcinany do 600 znaków; przy odczycie też wraca co najwyżej tyle ostatnich znaków. Wyłączenie zapisu: `memory_path=""`.
+„Usuń statystyki bota” kasuje jego rekordy z logów Groq oraz całe rozdania z `trajectories.jsonl`, w których grał.
 
+## Okno
 
-## Ocena jakości botów
+- **Stół.** Same boty mają karty odkryte. Jeden człowiek widzi swoje; karty botów odkrywa przełącznik. Kilku ludzi (hot-seat): zasłona między turami, stół obraca się do gracza.
+- **Tempo.** Pauza, krok, suwak (skrajnie w prawo = bez przerw), pauza po lewie. Boty liczą w osobnym wątku, licznik „myśli… X s” stoi na pauzie.
+- **Jakość.** Ranking ze średnim czasem odpowiedzi bota, trend, ocena legalnych kart ostatniego ruchu. Opcjonalnie podpowiedź dla człowieka.
+- **Bot.** Uzasadnienia, czasy, notatnik Groq.
+- **Pamięć** (przycisk w lobby, niedostępny w trakcie partii): podgląd i usuwanie `logs/memory_*.txt`.
 
-Przy pytaniu o liczbę graczy wpisz `0`: zamiast gry program liczy jakość ruchów z `logs/trajectories.jsonl` (nic nie jest liczone w trakcie gry). Każdy rekord logu ma pole `model` — id modelu LLM (`GroqICLBot.model`), `human` albo `smart_bot`. Starsze rekordy bez tego pola są liczone jako `unknown`.
+| Klawisz | Działanie |
+|---|---|
+| `Spacja` | pauza / wznów |
+| `N` | jeden ruch w pauzie |
+| `+` / `-` | szybciej / wolniej |
+| `Ctrl+1` … `Ctrl+4` | Wyniki, Jakość, Bot, Log |
+| `F11` | pełny ekran |
 
-Algorytm to port biblioteki „kierki” (`src/evaluation/`): dla każdego ruchu odtwarzany jest stan rozdania (pełna historia z kolejnych rekordów, 2–5 graczy, legalne ruchy z silnika, runda `hearts`: kier = 1 pkt, dama pik = 13 pkt) i wyliczana jest poprawność (0–100) oraz agresywność (0–100). Raport grupuje wyniki po modelu; ruchy wymuszone (jedna legalna karta) nie wchodzą do średnich.
+### Własna talia PNG
 
-Lista pomijanych graczy to `IGNORED_PLAYERS` na początku `main.py` (domyślnie `("human", "smart_bot")`). Zmień ją, żeby ocenić też człowieka lub bota heurystycznego.
+Domyślnie karty są wektorowe (opcjonalnie w 4 kolorach). Własne obrazki wrzuć do `assets/cards/`: `2C.png` … `AS.png` (ranga i kolor silnika, np. `TH.png` = 10♥) oraz `back.png`. Brakujące pliki są dorysowywane. Proporcje 7:10. Tryb 4-kolorowy działa tylko z talią wektorową.
