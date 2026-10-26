@@ -381,6 +381,13 @@ def test_missing_memory_shows_empty(tmp_path: Path) -> None:
     assert "(empty)" in bot.build_messages(make_obs(["3C", "QC"]))[1]["content"]
 
 
+def test_new_model_gets_its_own_memory_file_at_startup(tmp_path: Path) -> None:
+    GroqICLBot("P0", model="openai/gpt-oss-20b", client=FakeClient())
+    pad = tmp_path / "default_mem" / "memory_openai_gpt-oss-20b.txt"
+    assert pad.is_file() and pad.read_text(encoding="utf-8") == ""
+    assert GroqICLBot("P0", model="openai/gpt-oss-20b", client=FakeClient()).read_memory() == "(empty)"
+
+
 def test_default_memory_path_is_per_model(tmp_path: Path) -> None:
     bot = GroqICLBot(
         "P1", model="openai/gpt-oss-120b", client=FakeClient('{"card": "QC", "memory": "hi"}')
@@ -466,6 +473,7 @@ def test_prompt_says_a_full_pad_can_be_edited() -> None:
     system = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
     assert "saved to disk" in system
     assert "When editing, prune expired hand details" in system
+    assert "pad is not (empty)" in system
 
 
 def test_illegal_card_is_logged(tmp_path: Path) -> None:

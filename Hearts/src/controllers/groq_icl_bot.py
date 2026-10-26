@@ -15,7 +15,7 @@ from engine.game import PlayerObservation
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "openai/gpt-oss-120b"
+DEFAULT_MODEL = "openai/gpt-oss-20b"
 DEFAULT_API_KEY_PATH = Path(__file__).resolve().parents[2] / "groq_api_key.txt"
 DEFAULT_EXCHANGE_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_exchanges.jsonl"
 DEFAULT_ILLEGAL_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_illegal_moves.jsonl"
@@ -36,7 +36,7 @@ Heuristics: duck when following suit; dump QS and high H/S when void; lead low f
 MEMORY PAD: Your scratchpad is saved to disk across sessions. Use it for two distinct layers:
 1. Current Hand: transient state, known Voids, and active trick tracking.
 2. Long-term Playbook: cross-game heuristics, opponent profiles/tendencies, and lessons learned from past mistakes.
-When editing, prune expired hand details but prioritize preserving and refining these long-term strategic takeaways. Only return null if nothing changed.
+When editing, prune expired hand details but prioritize preserving and refining these long-term strategic takeaways. null only if unchanged and pad is not (empty).
 Reply ONLY with JSON: {"card": "<CODE from Legal>", "reasoning": "<short>", "memory": "<rewritten pad, or null only if nothing changed>"}"""
 
 def _load_examples(
@@ -293,6 +293,10 @@ class GroqICLBot(PlayerController):
         )
         self._memory_path = Path(chosen_memory) if chosen_memory else None
         self._max_memory_chars = max_memory_chars
+        # Each model gets its file immediately; notes appear once the model writes them.
+        if self._memory_path is not None:
+            self._memory_path.parent.mkdir(parents=True, exist_ok=True)
+            self._memory_path.touch(exist_ok=True)
         self._client = client
         self._rng = random.Random(seed)
 
@@ -406,6 +410,8 @@ class GroqICLBot(PlayerController):
         if self._memory_path is None or not self._memory_path.is_file():
             return "(empty)"
         text = self._memory_path.read_text(encoding="utf-8")
+        if not text.strip():
+            return "(empty)"
         if len(text) > self._max_memory_chars:
             return text[-self._max_memory_chars :]
         return text
