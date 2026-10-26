@@ -381,10 +381,18 @@ def test_missing_memory_shows_empty(tmp_path: Path) -> None:
     assert "(empty)" in bot.build_messages(make_obs(["3C", "QC"]))[1]["content"]
 
 
-def test_default_memory_path_is_per_player(tmp_path: Path) -> None:
-    bot = GroqICLBot("P1", client=FakeClient('{"card": "QC", "memory": "hi"}'))
+def test_default_memory_path_is_per_model(tmp_path: Path) -> None:
+    bot = GroqICLBot(
+        "P1", model="openai/gpt-oss-120b", client=FakeClient('{"card": "QC", "memory": "hi"}')
+    )
     bot.select_move(make_obs(["3C", "QC"]))
-    assert (tmp_path / "default_mem" / "memory_P1.txt").read_text(encoding="utf-8") == "hi"
+    pad = tmp_path / "default_mem" / "memory_openai_gpt-oss-120b.txt"
+    assert pad.read_text(encoding="utf-8") == "hi"
+    # Same model at another seat keeps the same pad; a different model gets its own file.
+    assert GroqICLBot("P0", model="openai/gpt-oss-120b", client=FakeClient()).read_memory() == "hi"
+    other = GroqICLBot("P0", model="other/model", client=FakeClient('{"card": "QC", "memory": "there"}'))
+    other.select_move(make_obs(["3C", "QC"], player_id="P0"))
+    assert (tmp_path / "default_mem" / "memory_other_model.txt").read_text(encoding="utf-8") == "there"
 
 
 @pytest.mark.parametrize("disabled", ["", False])
@@ -442,7 +450,7 @@ def test_exchange_log_stores_memory_after(tmp_path: Path) -> None:
 
 
 def test_memory_persists_for_a_new_bot(tmp_path: Path) -> None:
-    mem = tmp_path / "memory_P0.txt"
+    mem = tmp_path / "memory_openai_gpt-oss-120b.txt"
     first = GroqICLBot(
         "P0",
         client=FakeClient('{"card": "QC", "memory": "P1 void C"}'),
@@ -457,7 +465,7 @@ def test_memory_persists_for_a_new_bot(tmp_path: Path) -> None:
 def test_prompt_says_a_full_pad_can_be_edited() -> None:
     system = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
     assert "saved to disk" in system
-    assert "When the pad is full, edit it" in system
+    assert "When editing, prune expired hand details" in system
 
 
 def test_illegal_card_is_logged(tmp_path: Path) -> None:

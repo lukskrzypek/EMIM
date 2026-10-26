@@ -59,7 +59,7 @@ move = bot.select_move(observation)
 
 ### Notatnik (`memory`)
 
-Przy każdym ruchu model dostaje treść pliku `logs/memory_<gracz>.txt` (np. `memory_P1.txt`) i może ją nadpisać polem `memory` w JSON. `null` albo pusty string zostawia plik bez zmian. Zapis jest obcinany do 600 znaków; przy odczycie też wraca co najwyżej tyle ostatnich znaków. Wyłączenie zapisu: `memory_path=""`.
+Przy każdym ruchu model dostaje treść pliku `logs/memory_<model>.txt` (np. `memory_openai_gpt-oss-120b.txt`; znaki `/` i inne niedozwolone w nazwie pliku są zamieniane na `_`) i może ją nadpisać polem `memory` w JSON. Każdy model ma własny plik, wspólny dla wszystkich miejsc przy stole. `null` albo pusty string zostawia plik bez zmian. Zapis jest obcinany do 600 znaków; przy odczycie też wraca co najwyżej tyle ostatnich znaków. Wyłączenie zapisu: `memory_path=""`.
 
 
 ## Ocena jakości botów

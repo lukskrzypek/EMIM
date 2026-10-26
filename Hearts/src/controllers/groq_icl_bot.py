@@ -81,6 +81,12 @@ def _format_example(index: int, record: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def memory_filename(model: str) -> str:
+    """``memory_<bot>.txt``; characters illegal in a file name become ``_``."""
+    safe = re.sub(r'[<>:"/\\|?*]', "_", model.strip()) or "bot"
+    return f"memory_{safe}.txt"
+
+
 def read_api_key(path: Path) -> str:
     """Return the key from the first non-empty line of ``path``."""
     if not path.is_file():
@@ -281,9 +287,9 @@ class GroqICLBot(PlayerController):
         self._exchange_log_path = Path(chosen_log) if chosen_log else None
         chosen_illegal = DEFAULT_ILLEGAL_LOG_PATH if illegal_log_path is None else illegal_log_path
         self._illegal_log_path = Path(chosen_illegal) if chosen_illegal else None
-        # None means logs/memory_<seat>.txt. "" or False keeps the pad off disk.
+        # None means logs/memory_<model>.txt. "" or False keeps the pad off disk.
         chosen_memory = (
-            DEFAULT_MEMORY_DIR / f"memory_{player_id}.txt" if memory_path is None else memory_path
+            DEFAULT_MEMORY_DIR / memory_filename(model) if memory_path is None else memory_path
         )
         self._memory_path = Path(chosen_memory) if chosen_memory else None
         self._max_memory_chars = max_memory_chars
