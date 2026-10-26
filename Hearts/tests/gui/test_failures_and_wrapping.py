@@ -44,6 +44,10 @@ NO_MODEL = (
 )
 
 # What the OpenAI SDK raises (str(exc) is "Error code: <status> - <body>").
+OPENAI_NO_CREDITS = (
+    "request failed: Error code: 429 - You have no credits remaining. Add credits to continue "
+    "using the API at https://platform.openai.com/settings/organization/billing/."
+)
 OPENAI_QUOTA = (
     "request failed: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please "
     "check your plan and billing details. For more information on this error, read the docs: "
@@ -128,7 +132,8 @@ def test_classify_tells_tokens_access_and_rate_limits_apart() -> None:
 @pytest.mark.parametrize(
     ("text", "kind"),
     [
-        (OPENAI_QUOTA, "tokens"),  # a 429, but waiting does not bring the credit back
+        (OPENAI_NO_CREDITS, "tokens"),  # a 429, but the balance does not come back by waiting
+        (OPENAI_QUOTA, "tokens"),
         (OPENAI_HARD_LIMIT, "tokens"),
         (OPENAI_BAD_KEY, "access"),
         (OPENAI_NO_MODEL, "access"),
@@ -143,7 +148,7 @@ def test_classify_understands_openai_errors(text: str, kind: str) -> None:
 
 def test_a_real_openai_bot_with_no_credit_stops_the_game() -> None:
     def refuse(**_kw):  # type: ignore[no-untyped-def]
-        raise RuntimeError(OPENAI_QUOTA.removeprefix("request failed: "))
+        raise RuntimeError(OPENAI_NO_CREDITS.removeprefix("request failed: "))
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=refuse)))
     bot = AIBot(

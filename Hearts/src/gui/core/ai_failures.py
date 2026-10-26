@@ -18,8 +18,10 @@ FailureKind = Literal["tokens", "access", "rate"]
 _TOKEN_MARKERS = (
     "per day", "(tpd)", "(rpd)", "insufficient_quota", "exceeded your current quota",
     "quota", "out of tokens", "no tokens",
-    # OpenAI: spending cap reached / no payment method or credit on the account.
+    # OpenAI: spending cap, no payment method, or a prepaid balance of zero.
+    # "no credits remaining" is a 429, so it must match before the generic rate-limit check.
     "billing_hard_limit", "hard limit", "billing_not_active", "account is not active",
+    "no credits",
 )  # not "billing": per-minute errors also point to the billing page
 # Wrong key / no permission / unknown model: every move would fail the same way.
 _ACCESS_MARKERS = (
