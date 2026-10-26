@@ -11,6 +11,8 @@ class PlayerController(ABC):
     """Chooses one legal card from a player's observation."""
 
     last_reasoning: str = ""
+    # Saved with every logged move so the quality report can group by who played it.
+    model_name: str = "unknown"
 
     @abstractmethod
     def select_move(self, observation: PlayerObservation) -> str:

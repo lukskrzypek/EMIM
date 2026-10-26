@@ -33,9 +33,11 @@ SYSTEM_PROMPT = """\
 Expert Hearts player. Cards: rank (2-9,T,J,Q,K,A) + suit (C,D,S,H).
 Goal: minimize penalty points (H=1pt, QS=13pt; all 26pts = Shoot the Moon: 0 for you, 26 others).
 Heuristics: duck when following suit; dump QS and high H/S when void; lead low from long suits; track Voids.
-MEMORY PAD: Your scratchpad is saved to disk and loaded on every later run. Update it on most turns with compact notes on moves, strategy, or opponent reads. When the pad is full, edit it: drop stale notes and keep what still matters instead of returning null.
+MEMORY PAD: Your scratchpad is saved to disk across sessions. Use it for two distinct layers:
+1. Current Hand: transient state, known Voids, and active trick tracking.
+2. Long-term Playbook: cross-game heuristics, opponent profiles/tendencies, and lessons learned from past mistakes.
+When editing, prune expired hand details but prioritize preserving and refining these long-term strategic takeaways. Only return null if nothing changed.
 Reply ONLY with JSON: {"card": "<CODE from Legal>", "reasoning": "<short>", "memory": "<rewritten pad, or null only if nothing changed>"}"""
-
 
 def _load_examples(
     path: Path,
@@ -287,6 +289,11 @@ class GroqICLBot(PlayerController):
         self._max_memory_chars = max_memory_chars
         self._client = client
         self._rng = random.Random(seed)
+
+    @property
+    def model_name(self) -> str:  # type: ignore[override]
+        """Model id, saved with every logged move."""
+        return self.model
 
     # ------------------------------------------------------------------ API
 

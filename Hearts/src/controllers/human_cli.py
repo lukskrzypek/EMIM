@@ -31,6 +31,8 @@ def _parse_choice(raw: str, legal_moves: list[str]) -> str | None:
 class HumanCLIController(PlayerController):
     """Shows ``to_icl_prompt()`` and reads a card index or code (``0`` or ``2C``)."""
 
+    model_name = "human"
+
     def select_move(self, observation: PlayerObservation) -> str:
         if not observation.legal_moves:
             raise ValueError(f"{observation.player_id} has no legal moves")

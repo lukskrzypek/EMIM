@@ -14,11 +14,16 @@ from controllers.groq_icl_bot import GroqICLBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
 from engine.game import HeartsGameEngine
+from evaluation.report import evaluate_log, format_report
 from utils.icl_logger import ICLLogger
 
 PLAYER_COUNTS = (2, 3, 4, 5)
+QUALITY_MODE = 0  # entering 0 players runs the quality report instead of a game
 SAMPLES = 40
 LOG_PATH = ROOT / "logs" / "trajectories.jsonl"
+# Players left out of the quality report (the "model" field in trajectories.jsonl).
+# Remove a name to include it, e.g. IGNORED_PLAYERS = ("smart_bot",) rates the human too.
+IGNORED_PLAYERS: tuple[str, ...] = ("human", "smart_bot")
 
 # (key, label) shown once per seat.
 CONTROLLER_CHOICES: tuple[tuple[str, str], ...] = (
@@ -51,7 +56,8 @@ def play_deal(
         chosen = controllers[player_id].select_move(observation)
         if chosen not in observation.legal_moves:
             raise ValueError(f"{player_id} chose illegal move {chosen!r}")
-        logger.log(observation, chosen, controllers[player_id].last_reasoning)
+        controller = controllers[player_id]
+        logger.log(observation, chosen, controller.last_reasoning, controller.model_name)
         result = engine.play_card(player_id, chosen)
         if show_play:
             print(f"  {player_id}: {chosen}", flush=True)
@@ -139,10 +145,22 @@ def _show_batch(
 def _ask_players() -> int:
     options = ", ".join(str(n) for n in PLAYER_COUNTS)
     while True:
-        raw = input(f"Liczba graczy ({options}): ").strip()
-        if raw.isdigit() and int(raw) in PLAYER_COUNTS:
+        raw = input(f"Liczba graczy ({options}; {QUALITY_MODE} = ocena jakości botów z logu): ").strip()
+        if raw.isdigit() and int(raw) in (QUALITY_MODE, *PLAYER_COUNTS):
             return int(raw)
-        print(f"Podaj jedną z liczb: {options}.")
+        print(f"Podaj jedną z liczb: {QUALITY_MODE}, {options}.")
+
+
+def run_quality_report(
+    log_path: Path = LOG_PATH,
+    ignored: tuple[str, ...] = IGNORED_PLAYERS,
+) -> bool:
+    """Print bot quality computed from the trajectory log. False when there is no log."""
+    if not log_path.is_file():
+        print(f"Brak logu {log_path}. Najpierw rozegraj kilka partii.")
+        return False
+    print(format_report(evaluate_log(log_path, ignored)))
+    return True
 
 
 def _ask_kind(player_id: str) -> str:
@@ -174,9 +192,12 @@ def _make_controller(kind: str, player_id: str, seat: int) -> PlayerController:
     raise ValueError(f"Unknown controller: {kind!r}")
 
 
-def setup_match() -> tuple[int, dict[str, PlayerController], int, bool]:
+def setup_match(
+    num_players: int | None = None,
+) -> tuple[int, dict[str, PlayerController], int, bool]:
     """Ask for the table, then for a deal count when every seat is a bot."""
-    num_players = _ask_players()
+    if num_players is None:
+        num_players = _ask_players()
     kinds = [_ask_kind(f"P{i}") for i in range(num_players)]
     controllers = {
         f"P{i}": _make_controller(kinds[i], f"P{i}", i) for i in range(num_players)
@@ -193,7 +214,11 @@ def setup_match() -> tuple[int, dict[str, PlayerController], int, bool]:
 
 
 def main() -> None:
-    num_players, controllers, deals, show_play = setup_match()
+    chosen_players = _ask_players()
+    if chosen_players == QUALITY_MODE:
+        run_quality_report()
+        return
+    num_players, controllers, deals, show_play = setup_match(chosen_players)
     totals = play_session(
         num_players,
         controllers,

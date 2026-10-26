@@ -11,7 +11,10 @@ DEFAULT_LOG_PATH = Path("logs") / "trajectories.jsonl"
 
 
 class ICLLogger:
-    """Writes one JSON line per move to ``logs/trajectories.jsonl``."""
+    """Writes one JSON line per move to ``logs/trajectories.jsonl``.
+
+    ``model`` names who played the move: an LLM id, ``human`` or ``smart_bot``.
+    """
 
     def __init__(self, path: str | Path = DEFAULT_LOG_PATH) -> None:
         self.path = Path(path)
@@ -21,9 +24,11 @@ class ICLLogger:
         observation: PlayerObservation,
         chosen_move: str,
         reasoning: str = "",
+        model: str = "unknown",
     ) -> None:
         record = {
             "player_id": observation.player_id,
+            "model": model,
             "prompt_context": observation.to_icl_prompt(),
             "legal_moves": list(observation.legal_moves),
             "chosen_move": chosen_move,

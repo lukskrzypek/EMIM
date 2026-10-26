@@ -50,6 +50,7 @@ def test_random_full_deal_is_logged(tmp_path: Path) -> None:
         record = json.loads(line)
         assert list(record) == [
             "player_id",
+            "model",
             "prompt_context",
             "legal_moves",
             "chosen_move",
@@ -58,3 +59,4 @@ def test_random_full_deal_is_logged(tmp_path: Path) -> None:
         assert record["chosen_move"] in record["legal_moves"]
         assert record["prompt_context"]
         assert record["reasoning"] == ""
+        assert record["model"] == "unknown"  # default for controllers without a model_name

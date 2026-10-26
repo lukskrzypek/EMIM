@@ -285,6 +285,8 @@ class SmartHeartsBot(PlayerController):
     shows a clear improvement.
     """
 
+    model_name = "smart_bot"
+
     def __init__(
         self,
         num_samples: int = 40,
