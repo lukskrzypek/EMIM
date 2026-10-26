@@ -18,12 +18,17 @@ FailureKind = Literal["tokens", "access", "rate"]
 _TOKEN_MARKERS = (
     "per day", "(tpd)", "(rpd)", "insufficient_quota", "exceeded your current quota",
     "quota", "out of tokens", "no tokens",
+    # OpenAI: spending cap reached / no payment method or credit on the account.
+    "billing_hard_limit", "hard limit", "billing_not_active", "account is not active",
 )  # not "billing": per-minute errors also point to the billing page
 # Wrong key / no permission / unknown model: every move would fail the same way.
 _ACCESS_MARKERS = (
     "error code: 401", "error code: 403", "error code: 404", "invalid_api_key",
     "model_not_found", "does not exist or you do not have access", "permission",
     "organization_restricted", "model_permission_blocked",
+    # OpenAI: wrong key, model closed to the project, organization not verified, banned account.
+    "incorrect api key", "does not have access to model", "must be verified",
+    "account_deactivated", "unsupported_country_region_territory",
 )
 # Short-lived limits (per minute): later moves may work again.
 _RATE_MARKERS = ("rate limit", "rate_limit", "error code: 429", "per minute", "(tpm)", "(rpm)")
@@ -44,7 +49,7 @@ HEADLINES: dict[str, str] = {
     "access": "Brak dostępu do modelu AI",
 }
 REASONS: dict[str, str] = {
-    "tokens": "wyczerpany limit tokenów (dzienny lub na koncie)",
+    "tokens": "wyczerpany limit tokenów lub środków (dzienny, miesięczny albo na koncie)",
     "access": "model jest niedostępny dla tego klucza API (zła nazwa modelu, klucz albo uprawnienia)",
 }
 

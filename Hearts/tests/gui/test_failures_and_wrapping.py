@@ -43,6 +43,36 @@ NO_MODEL = (
     "does not exist or you do not have access to it.', 'code': 'model_not_found'}}"
 )
 
+# What the OpenAI SDK raises (str(exc) is "Error code: <status> - <body>").
+OPENAI_QUOTA = (
+    "request failed: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please "
+    "check your plan and billing details. For more information on this error, read the docs: "
+    "https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', "
+    "'param': None, 'code': 'insufficient_quota'}}"
+)
+OPENAI_HARD_LIMIT = (
+    "request failed: Error code: 400 - {'error': {'message': 'Billing hard limit has been reached', "
+    "'type': 'invalid_request_error', 'code': 'billing_hard_limit_reached'}}"
+)
+OPENAI_RATE = (
+    "request failed: Error code: 429 - {'error': {'message': 'Rate limit reached for gpt-4o in "
+    "organization org-x on requests per min (RPM): Limit 3, Used 3, Requested 1. Please try again in "
+    "20s.', 'type': 'requests', 'param': None, 'code': 'rate_limit_exceeded'}}"
+)
+OPENAI_BAD_KEY = (
+    "request failed: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-abc. You "
+    "can find your API key at https://platform.openai.com/account/api-keys.', "
+    "'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}"
+)
+OPENAI_NO_MODEL = (
+    "request failed: Error code: 404 - {'error': {'message': 'The model `gpt-9` does not exist or you "
+    "do not have access to it.', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_found'}}"
+)
+OPENAI_PROJECT_DENIED = (
+    "request failed: Error code: 403 - {'error': {'message': 'Project `proj_x` does not have access to "
+    "model `gpt-5`', 'type': 'invalid_request_error', 'param': None, 'code': 'model_not_found'}}"
+)
+
 
 def _factory(seed: int):  # type: ignore[no-untyped-def]
     return lambda n, k: HeartsGameEngine(n, seed=seed + k)
@@ -93,6 +123,36 @@ def test_classify_tells_tokens_access_and_rate_limits_apart() -> None:
     assert "TPD" in classify_failure(DAILY).message
     for text in (None, "", "fine", "I will duck. request failed: later", "request failed: boom"):
         assert classify_failure(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        (OPENAI_QUOTA, "tokens"),  # a 429, but waiting does not bring the credit back
+        (OPENAI_HARD_LIMIT, "tokens"),
+        (OPENAI_BAD_KEY, "access"),
+        (OPENAI_NO_MODEL, "access"),
+        (OPENAI_PROJECT_DENIED, "access"),
+        (OPENAI_RATE, "rate"),
+    ],
+)
+def test_classify_understands_openai_errors(text: str, kind: str) -> None:
+    failure = classify_failure(text)
+    assert failure is not None and failure.kind == kind and failure.fatal == (kind != "rate")
+
+
+def test_a_real_openai_bot_with_no_credit_stops_the_game() -> None:
+    def refuse(**_kw):  # type: ignore[no-untyped-def]
+        raise RuntimeError(OPENAI_QUOTA.removeprefix("request failed: "))
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=refuse)))
+    bot = AIBot(
+        "P0", provider="openai", client=client,
+        exchange_log_path="", illegal_log_path="", api_error_log_path="", memory_path=None,
+    )
+    sink = _run(bot)
+    assert sink.of(BotUnavailable)[0].reason == "tokens"
+    assert sink.wait_finished().aborted
 
 
 # -------------------------------------------------------------------- runner
