@@ -1,9 +1,11 @@
-r"""Lists the Groq models your API key can use (read-only request, nothing is generated).
+r"""Lists the models your API key can use (read-only request, nothing is generated).
 
-    .\.venv-gui\Scripts\python.exe check_models.py
+    .\.venv-gui\Scripts\python.exe check_models.py           # Groq (default)
+    .\.venv-gui\Scripts\python.exe check_models.py openai
 
-Paste the ids you want into ``groq_models.txt``. Only chat models can play Hearts; classifiers
-(``prompt-guard``), speech (``whisper``, ``orpheus``) and the like are marked as such.
+Paste the ids you want into ``groq_models.txt`` or ``openai_models.txt``. Only chat models can
+play Hearts; classifiers (``prompt-guard``), speech (``whisper``, ``orpheus``, ``tts``), images
+(``dall-e``) and the like are marked as such.
 """
 
 from __future__ import annotations
@@ -15,21 +17,32 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from controllers.groq_icl_bot import DEFAULT_API_KEY_PATH, read_api_key  # noqa: E402
+from controllers.ai_bot import DEFAULT_PROVIDER, PROVIDERS, read_api_key  # noqa: E402
 
-NOT_CHAT = ("guard", "whisper", "orpheus", "tts", "embed")
+MODELS_URLS = {
+    "groq": "https://api.groq.com/openai/v1/models",
+    "openai": "https://api.openai.com/v1/models",
+}
+NOT_CHAT = ("guard", "whisper", "orpheus", "tts", "embed", "dall-e", "moderation", "image", "audio",
+            "realtime", "transcribe")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # Polish text in a Windows console
+    args = sys.argv[1:] if argv is None else argv
+    provider = (args[0] if args else DEFAULT_PROVIDER).lower()
+    if provider not in PROVIDERS:
+        print(f"Nieznany dostawca '{provider}'. Dostępne: {', '.join(PROVIDERS)}.")
+        return 1
+    info = PROVIDERS[provider]
     try:
-        key = read_api_key(DEFAULT_API_KEY_PATH)
+        key = read_api_key(info.key_path, provider)
     except RuntimeError as exc:
         print(exc)
         return 1
     request = urllib.request.Request(
-        "https://api.groq.com/openai/v1/models",
+        MODELS_URLS[provider],
         headers={"Authorization": f"Bearer {key}", "User-Agent": "hearts-check-models"},
     )
     try:
@@ -38,10 +51,15 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - a diagnostic tool: show whatever went wrong
         print(f"Nie udało się pobrać listy modeli: {exc}")
         return 1
-    print("Modele dostępne dla tego klucza ('+' = nadaje się do gry, '-' = nie jest modelem czatowym):\n")
+    print(
+        f"Modele {info.label} dostępne dla tego klucza "
+        "('+' = nadaje się do gry, '-' = nie jest modelem czatowym):\n"
+    )
     for model in sorted(models, key=lambda m: m["id"]):
         chat = not any(word in model["id"].lower() for word in NOT_CHAT)
-        print(f"  {'+' if chat else '-'} {model['id']}  (kontekst {model.get('context_window')})")
+        context = model.get("context_window")
+        suffix = f"  (kontekst {context})" if context else ""
+        print(f"  {'+' if chat else '-'} {model['id']}{suffix}")
     return 0
 
 

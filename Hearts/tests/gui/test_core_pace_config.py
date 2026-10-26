@@ -11,7 +11,7 @@ from engine.game import HeartsGameEngine
 from gui.core.controllers_factory import availability_problem, build_controller
 from gui.core.human_controller import HumanGuiController, MoveCancelled
 from gui.core.pace import PaceControl
-from gui.core.seat_config import SeatConfig, SeatKind, SessionConfig, duplicate_groq_memories
+from gui.core.seat_config import SeatConfig, SeatKind, SessionConfig, duplicate_ai_memories
 from gui.core.session import SessionStats, leaders
 from gui.core.snapshot import snapshot_from_engine
 
@@ -162,43 +162,43 @@ def test_session_config_validation() -> None:
 
 
 def test_factory_builds_each_kind(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    from controllers.groq_icl_bot import GroqICLBot
+    from controllers.ai_bot import AIBot
     from controllers.smart_bot import SmartHeartsBot
 
     assert isinstance(build_controller(SeatConfig(SeatKind.HUMAN), "P0", 0), HumanGuiController)
     assert isinstance(build_controller(SeatConfig(SeatKind.SMART), "P1", 1), SmartHeartsBot)
-    groq = build_controller(
-        SeatConfig(SeatKind.GROQ, groq_model="m/x"), "P2", 2, trajectories_path=None
+    ai_bot = build_controller(
+        SeatConfig(SeatKind.AI, ai_model="m/x"), "P2", 2, trajectories_path=None
     )
-    assert isinstance(groq, GroqICLBot) and groq.player_id == "P2" and groq.model == "m/x"
+    assert isinstance(ai_bot, AIBot) and ai_bot.player_id == "P2" and ai_bot.model == "m/x"
 
 
-def test_one_groq_model_on_two_seats_needs_different_names() -> None:
-    a = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-20b")
-    b = SeatConfig(SeatKind.GROQ, groq_model="  OpenAI/GPT-OSS-20B ")
-    c = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-120b")
-    smart = SeatConfig(SeatKind.SMART, groq_model="openai/gpt-oss-20b")  # model unused here
-    assert duplicate_groq_memories((a, c, smart)) == []
-    assert duplicate_groq_memories((a, b, c)) == ["openai/gpt-oss-20b"]  # one memory file for both
+def test_one_ai_model_on_two_seats_needs_different_names() -> None:
+    a = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b")
+    b = SeatConfig(SeatKind.AI, ai_model="  OpenAI/GPT-OSS-20B ")
+    c = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-120b")
+    smart = SeatConfig(SeatKind.SMART, ai_model="openai/gpt-oss-20b")  # model unused here
+    assert duplicate_ai_memories((a, c, smart)) == []
+    assert duplicate_ai_memories((a, b, c)) == ["openai/gpt-oss-20b"]  # one memory file for both
     SessionConfig((a, c, smart, smart))  # many SmartHeartsBots are fine
     with pytest.raises(ValueError, match="different names"):
         SessionConfig((a, b))
 
-    named = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-20b", groq_name="bold")
-    twin = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-20b", groq_name="BOLD")
-    assert duplicate_groq_memories((a, named)) == []  # one without a name, one with: fine
+    named = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b", ai_name="bold")
+    twin = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b", ai_name="BOLD")
+    assert duplicate_ai_memories((a, named)) == []  # one without a name, one with: fine
     SessionConfig((a, named))
-    assert duplicate_groq_memories((named, twin)) == ["openai/gpt-oss-20b (bold)"]  # same file
+    assert duplicate_ai_memories((named, twin)) == ["openai/gpt-oss-20b (bold)"]  # same file
     with pytest.raises(ValueError):
         SessionConfig((named, twin))
 
 
 def test_seat_name_decides_the_memory_file(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    from controllers.groq_icl_bot import memory_filename
+    from controllers.ai_bot import memory_filename
     from gui.core.seat_config import clean_name
 
-    plain = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-120b")
-    named = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-120b", groq_name="bold")
+    plain = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-120b")
+    named = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-120b", ai_name="bold")
     assert memory_filename(plain.memory_key) == "memory_openai_gpt-oss-120b.txt"
     assert memory_filename(named.memory_key) == "memory_openai_gpt-oss-120b_bold.txt"
     assert plain.display_name == "openai/gpt-oss-120b"
@@ -208,7 +208,7 @@ def test_seat_name_decides_the_memory_file(tmp_path, monkeypatch) -> None:  # ty
     assert clean_name("  a b/c:d*  ") == "a_b_c_d_"
     assert clean_name("x" * 40) == "x" * 10 and clean_name("zażółć-1") == "zażółć-1"
 
-    monkeypatch.setattr("controllers.groq_icl_bot.DEFAULT_MEMORY_DIR", tmp_path)  # keep logs/ clean
+    monkeypatch.setattr("controllers.ai_bot.DEFAULT_MEMORY_DIR", tmp_path)  # keep logs/ clean
     bot = build_controller(named, "P0", 0, trajectories_path=None)  # the bot gets the name itself
     assert bot.name == "bold" and bot.model_name == "openai/gpt-oss-120b_bold"
     assert bot._memory_path == tmp_path / "memory_openai_gpt-oss-120b_bold.txt"
@@ -223,27 +223,44 @@ def test_model_catalog_reads_a_file_and_falls_back(tmp_path) -> None:  # type: i
     path.write_text("\ufeffx/one\ny/two\n", encoding="utf-8")
     assert load_models(path) == ("x/one", "y/two")
     path.write_text("# nothing here\n", encoding="utf-8")
-    assert load_models(path) == FALLBACK_MODELS
-    assert load_models(tmp_path / "missing.txt") == FALLBACK_MODELS
+    assert load_models(path) == FALLBACK_MODELS["groq"]
+    assert load_models(tmp_path / "missing.txt") == FALLBACK_MODELS["groq"]
+    assert load_models(tmp_path / "missing.txt", "openai") == FALLBACK_MODELS["openai"]
 
 
-def test_shipped_model_list_is_usable() -> None:
+@pytest.mark.parametrize("provider", ["groq", "openai"])
+def test_shipped_model_list_is_usable(provider: str) -> None:
     from gui.core.model_catalog import load_models
 
-    models = load_models()
+    models = load_models(provider=provider)
     assert len(models) >= 2 and len({m.casefold() for m in models}) == len(models)
 
 
-def test_factory_passes_guidelines_to_the_groq_bot() -> None:
-    from controllers.groq_icl_bot import USER_GUIDELINES
+def test_each_provider_has_its_own_model_file_and_key_file() -> None:
+    from controllers.ai_bot import PROVIDERS
+
+    assert PROVIDERS["groq"].models_path.name == "groq_models.txt"
+    assert PROVIDERS["openai"].models_path.name == "openai_models.txt"
+    assert PROVIDERS["groq"].key_path.name == "groq_api_key.txt"
+    assert PROVIDERS["openai"].key_path.name == "openai_api_key.txt"
+
+
+def test_factory_passes_the_provider_to_the_ai_bot() -> None:
+    seat = SeatConfig(SeatKind.AI, ai_provider="openai", ai_model="gpt-4o-mini")
+    bot = build_controller(seat, "P1", 1, trajectories_path=None)
+    assert bot.provider == "openai" and bot.model == "gpt-4o-mini"
+
+
+def test_factory_passes_guidelines_to_the_ai_bot() -> None:
+    from controllers.ai_bot import USER_GUIDELINES
 
     def bot(**kw):  # type: ignore[no-untyped-def]
-        return build_controller(SeatConfig(SeatKind.GROQ, **kw), "P1", 1, trajectories_path=None)
+        return build_controller(SeatConfig(SeatKind.AI, **kw), "P1", 1, trajectories_path=None)
 
-    assert bot(groq_guidelines="  Take no hearts.  ")._guidelines == "Take no hearts."
-    assert bot(groq_guidelines="")._guidelines == USER_GUIDELINES  # empty -> the bot's default
-    assert len(bot(groq_guidelines="x" * 500)._guidelines) == 100
-    messages = bot(groq_guidelines="Duck early.").build_messages(_observation())
+    assert bot(ai_guidelines="  Take no hearts.  ")._guidelines == "Take no hearts."
+    assert bot(ai_guidelines="")._guidelines == USER_GUIDELINES  # empty -> the bot's default
+    assert len(bot(ai_guidelines="x" * 500)._guidelines) == 100
+    messages = bot(ai_guidelines="Duck early.").build_messages(_observation())
     assert messages[0]["content"].endswith("Duck early.")
 
 
@@ -253,12 +270,14 @@ def _observation():  # type: ignore[no-untyped-def]
 
 
 def test_availability_reports_a_missing_key(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    groq = SeatConfig(SeatKind.GROQ)
     assert availability_problem(SeatConfig(SeatKind.SMART)) is None
-    assert availability_problem(groq, tmp_path / "missing.txt") is not None
-    key = tmp_path / "key.txt"
-    key.write_text("gsk_x", encoding="utf-8")
-    assert availability_problem(groq, key) is None
+    for provider in ("groq", "openai"):
+        seat = SeatConfig(SeatKind.AI, ai_provider=provider)
+        problem = availability_problem(seat, tmp_path / "missing.txt")
+        assert problem is not None and provider in problem.lower()
+        key = tmp_path / f"{provider}_key.txt"
+        key.write_text("sk_x", encoding="utf-8")
+        assert availability_problem(seat, key) is None
 
 
 def test_snapshot_exposes_all_hands_and_legal_moves() -> None:

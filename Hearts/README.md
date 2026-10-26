@@ -1,6 +1,6 @@
 # Hearts (Kierki)
 
-Jedno rozdanie kierków (2–5 graczy): człowiek, bot heurystyczny (`SmartHeartsBot`) i bot LLM (`GroqICLBot`), w oknie albo w konsoli. Zasady są w `SPEC.md`. Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
+Jedno rozdanie kierków (2–5 graczy): człowiek, bot heurystyczny (`SmartHeartsBot`) i bot LLM (`AIBot`), w oknie albo w konsoli. Zasady są w `SPEC.md`. Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
 
 ## Szybki start
 
@@ -16,9 +16,9 @@ python -m venv .venv-gui
 .\.venv-gui\Scripts\python.exe -m pip install -r requirements-gui.txt
 ```
 
-To `groq`, `PySide6`, `pytest` i `pytest-qt`. Sam `main.py` wystarczy z `pip install -r requirements.txt` (`groq`, `pytest`). Silnik i `SmartHeartsBot` działają bez tych pakietów.
+To `groq`, `openai`, `PySide6`, `pytest` i `pytest-qt`. Sam `main.py` wystarczy z `pip install -r requirements.txt` (`groq`, `openai`, `pytest`). Silnik i `SmartHeartsBot` działają bez tych pakietów.
 
-- **Klucz Groq** — tylko dla `GroqICLBot`. Darmowe konto na [console.groq.com](https://console.groq.com/keys), klucz `gsk_...`.
+- **Klucz API** — tylko dla `AIBot`, wystarczy jeden z dwóch dostawców: Groq (darmowe konto na [console.groq.com](https://console.groq.com/keys), klucz `gsk_...`) albo OpenAI ([platform.openai.com](https://platform.openai.com/api-keys), klucz `sk-...`). Przy stole mogą siedzieć boty z obu naraz.
 
 ### Jak uruchomić
 
@@ -27,26 +27,27 @@ To `groq`, `PySide6`, `pytest` i `pytest-qt`. Sam `main.py` wystarczy z `pip ins
 .\.venv-gui\Scripts\python.exe main.py
 ```
 
-W lobby wybierz graczy i kliknij „Rozpocznij grę”. Bez `groq_api_key.txt` bot Groq jest niedostępny, reszta działa. Testy: `.\.venv-gui\Scripts\python.exe -m pytest` (bez PySide6 i `pytest-qt` testy GUI są pomijane).
+W lobby wybierz graczy i kliknij „Rozpocznij grę”. Bez pliku z kluczem dostawcy bot tego dostawcy jest niedostępny, reszta działa. Testy: `.\.venv-gui\Scripts\python.exe -m pytest` (bez PySide6 i `pytest-qt` testy GUI są pomijane).
 
 ### Ustawienia
 
 | Co | Gdzie |
 |---|---|
-| Klucz API | `groq_api_key.txt` — pierwsza niepusta linia (`gsk_...`), cudzysłowy na brzegach są obcinane. Plik jest w `.gitignore`. Zmienna `GROQ_API_KEY` nie jest czytana. |
-| Modele w lobby | `groq_models.txt`, jeden identyfikator w linii (`#` pomija linię). Po zmianie wróć do lobby. |
-| Wytyczne bota Groq | lobby, pole „wytyczne startowe”, do 100 znaków, najlepiej po angielsku. Puste = `USER_GUIDELINES` w `src/controllers/groq_icl_bot.py`. |
+| Klucz API | `groq_api_key.txt` albo `openai_api_key.txt` — pierwsza niepusta linia, cudzysłowy na brzegach są obcinane. Pliki są w `.gitignore`. Zmienne środowiskowe nie są czytane. |
+| Modele w lobby | `groq_models.txt` i `openai_models.txt`, jeden identyfikator w linii (`#` pomija linię). Po zmianie wróć do lobby. |
+| Wytyczne bota AI | lobby, pole „wytyczne startowe”, do 100 znaków, najlepiej po angielsku. Puste = `USER_GUIDELINES` w `src/controllers/ai_bot.py`. |
 | Gracze, rozdania, tempo | lobby i ekran gry; zostają między uruchomieniami. |
 
-Nadają się modele czatowe. `llama-prompt-guard` to klasyfikatory i nie zagrają. `404 model_not_found` znaczy, że klucz nie widzi modelu:
+Nadają się modele czatowe. `llama-prompt-guard`, `whisper`, `tts` czy `dall-e` nie zagrają. `404 model_not_found` znaczy, że klucz nie widzi modelu:
 
 ```powershell
-.\.venv-gui\Scripts\python.exe check_models.py
+.\.venv-gui\Scripts\python.exe check_models.py groq
+.\.venv-gui\Scripts\python.exe check_models.py openai
 ```
 
 ## Konsola
 
-`main.py` pyta o liczbę graczy (2–5) i kontroler na każdym miejscu. Z człowiekiem przy stole jest jedno rozdanie. Same boty: program pyta o liczbę partii (jedna wypisuje ręce i zagrania, wiele — wynik każdego rozdania i podsumowanie). `0` zamiast liczby graczy uruchamia ocenę z logu.
+`main.py` pyta o liczbę graczy (2–5) i kontroler na każdym miejscu (człowiek, `SmartHeartsBot`, `AIBot` z Groq albo z OpenAI). Z człowiekiem przy stole jest jedno rozdanie. Same boty: program pyta o liczbę partii (jedna wypisuje ręce i zagrania, wiele — wynik każdego rozdania i podsumowanie). `0` zamiast liczby graczy uruchamia ocenę z logu.
 
 Każdy ruch trafia do `logs/trajectories.jsonl` (kontekst, legalne karty, karta, uzasadnienie). Pole `model` to id LLM, `human` albo `smart_bot`.
 
@@ -56,15 +57,15 @@ Każdy ruch trafia do `logs/trajectories.jsonl` (kontekst, legalne karty, karta,
 |---|---|
 | `HumanCLIController` | Czyści konsolę między turami. Indeks albo kod karty (`0` lub `2C`). |
 | `SmartHeartsBot` | Heurystyki i 40 losowań niewidocznych rąk (`num_samples`). Karta o najniższej średniej karze. Bez sieci. |
-| `GroqICLBot` | Jedno zapytanie do Groq na ruch, gdy legalnych kart jest więcej niż jedna. |
+| `AIBot` | Jedno zapytanie do API (Groq albo OpenAI) na ruch, gdy legalnych kart jest więcej niż jedna. |
 
-## GroqICLBot
+## AIBot
 
-Domyślny model: `openai/gpt-oss-120b`. Dla `gpt-oss` jest `reasoning_effort="low"` i ścisły JSON (`card` z listy legalnych, `reasoning`, `memory`). Pozostałe modele dostają zwykły tryb JSON; odpowiedź w bloku ` ```json ` też jest czytana. Gdy API odrzuci format (400) albo limit `max_tokens`, bot łagodzi wymaganie albo obniża limit (najwyżej dwa ponowienia na ruch) i zapamiętuje to na kolejne ruchy.
+Dostawca (`provider="groq"` lub `"openai"`) wybiera SDK, plik z kluczem i listę modeli. Domyślny model: `openai/gpt-oss-120b` (Groq) i `gpt-4o-mini` (OpenAI). Ścisły JSON (`card` z listy legalnych, `reasoning`, `memory`) dostają `gpt-oss` na Groq i modele OpenAI; reasoning models (`gpt-oss`, `o*`, `gpt-5*`) dostają `reasoning_effort="low"`. Pozostałe modele Groq dostają zwykły tryb JSON; odpowiedź w bloku ` ```json ` też jest czytana. OpenAI dostaje limit jako `max_completion_tokens`. Gdy API odrzuci format, `temperature`, `reasoning_effort` (400) albo limit tokenów, bot łagodzi wymaganie albo obniża limit (najwyżej pięć ponowień na ruch) i zapamiętuje to na kolejne ruchy.
 
 - Jedna legalna karta jest grana od razu.
-- Błąd API, pusta odpowiedź albo karta spoza listy: pierwsza legalna karta. Odrzucenie przez API → `logs/groq_api_errors.jsonl`. Odpowiedź, która nie jest legalną kartą → `logs/groq_illegal_moves.jsonl`.
-- Pełne zapytanie i surowa odpowiedź → `logs/groq_exchanges.jsonl` (bez klucza).
+- Błąd API, pusta odpowiedź albo karta spoza listy: pierwsza legalna karta. Odrzucenie przez API → `logs/ai_api_errors.jsonl`. Odpowiedź, która nie jest legalną kartą → `logs/ai_illegal_moves.jsonl`.
+- Pełne zapytanie i surowa odpowiedź → `logs/ai_exchanges.jsonl` (bez klucza).
 - Few-shot jest wyłączony (`num_examples=0`). Przykłady z `logs/trajectories.jsonl` dokładają się przez `num_examples` (ostatnie rekordy albo `example_selection="random"`). Do promptu wchodzą tylko rekordy z więcej niż jedną kartą legalną.
 
 Pusty albo brakujący klucz kończy się `RuntimeError` przy pierwszym zapytaniu.
@@ -81,14 +82,14 @@ Konsola: `0` przy pytaniu o liczbę graczy. Okno: zakładka „Jakość” liczy
 
 Dla każdego ruchu odtwarzany jest stan rozdania (kier = 1 pkt, dama pik = 13 pkt) i wychodzi poprawność oraz agresywność (0–100). Ruchy z jedną legalną kartą nie wchodzą do średnich. Pomijani gracze: `IGNORED_PLAYERS` na początku `main.py`, domyślnie `("human", "smart_bot")`. Raport używa domyślnych parametrów ewaluatora; parametry z okna obowiązują tylko w bieżącej sesji.
 
-„Usuń statystyki bota” kasuje jego rekordy z logów Groq oraz całe rozdania z `trajectories.jsonl`, w których grał.
+„Usuń statystyki bota” kasuje jego rekordy z logów AI oraz całe rozdania z `trajectories.jsonl`, w których grał.
 
 ## Okno
 
 - **Stół.** Same boty mają karty odkryte. Jeden człowiek widzi swoje; karty botów odkrywa przełącznik. Kilku ludzi (hot-seat): zasłona między turami, stół obraca się do gracza.
 - **Tempo.** Pauza, krok, suwak (skrajnie w prawo = bez przerw), pauza po lewie. Boty liczą w osobnym wątku, licznik „myśli… X s” stoi na pauzie.
 - **Jakość.** Ranking ze średnim czasem odpowiedzi bota, trend, ocena legalnych kart ostatniego ruchu. Opcjonalnie podpowiedź dla człowieka.
-- **Bot.** Uzasadnienia, czasy, notatnik Groq.
+- **Bot.** Uzasadnienia, czasy, notatnik AI.
 - **Pamięć** (przycisk w lobby, niedostępny w trakcie partii): podgląd i usuwanie `logs/memory_*.txt`.
 
 | Klawisz | Działanie |

@@ -274,7 +274,7 @@ def test_insight_tab_shows_reasoning_and_think_times(qtbot) -> None:  # type: ig
 
     insight = view.insight
     assert insight.seat_box.count() == 3
-    assert not insight.memory.isVisibleTo(insight)  # no Groq seat
+    assert not insight.memory.isVisibleTo(insight)  # no AI seat
     # follow mode shows whoever moved last; pin the 'Talker' seat to read its text
     insight.follow.setChecked(False)
     insight.seat_box.setCurrentIndex(insight.seat_box.findData("P0"))
@@ -288,7 +288,7 @@ def test_insight_tab_shows_reasoning_and_think_times(qtbot) -> None:  # type: ig
     session.close()
 
 
-def test_insight_tab_reads_the_groq_memory_only_for_groq_seats(qtbot) -> None:  # type: ignore[no-untyped-def]
+def test_insight_tab_reads_the_ai_memory_only_for_ai_seats(qtbot) -> None:  # type: ignore[no-untyped-def]
     asked: list[str] = []
 
     def reader(model: str) -> str:

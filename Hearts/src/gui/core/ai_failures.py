@@ -1,6 +1,6 @@
-"""Recognises Groq API failures that the bot hides behind a fallback move.
+"""Recognises AI API failures that the bot hides behind a fallback move.
 
-``GroqICLBot`` catches every API error and plays the first legal card, leaving
+``AIBot`` catches every API error and plays the first legal card, leaving
 ``last_reasoning == "request failed: <error>"``. The GUI reads that text to stop
 a game that cannot go on (no tokens, no access) instead of letting a bot play blindly.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-FAILURE_PREFIX = "request failed:"  # what GroqICLBot writes into last_reasoning
+FAILURE_PREFIX = "request failed:"  # what AIBot writes into last_reasoning
 
 FailureKind = Literal["tokens", "access", "rate"]
 
@@ -30,7 +30,7 @@ _RATE_MARKERS = ("rate limit", "rate_limit", "error code: 429", "per minute", "(
 
 
 @dataclass(frozen=True)
-class GroqFailure:
+class AIFailure:
     kind: FailureKind
     message: str  # the API's own text, without the "request failed:" prefix
 
@@ -40,8 +40,8 @@ class GroqFailure:
 
 
 HEADLINES: dict[str, str] = {
-    "tokens": "Skończyły się tokeny Groq",
-    "access": "Brak dostępu do modelu Groq",
+    "tokens": "Skończyły się tokeny API",
+    "access": "Brak dostępu do modelu AI",
 }
 REASONS: dict[str, str] = {
     "tokens": "wyczerpany limit tokenów (dzienny lub na koncie)",
@@ -49,7 +49,7 @@ REASONS: dict[str, str] = {
 }
 
 
-def classify_failure(reasoning: str | None) -> GroqFailure | None:
+def classify_failure(reasoning: str | None) -> AIFailure | None:
     """``None`` for a normal move; otherwise what went wrong with the request."""
     text = (reasoning or "").strip()
     if not text.lower().startswith(FAILURE_PREFIX):
@@ -57,9 +57,9 @@ def classify_failure(reasoning: str | None) -> GroqFailure | None:
     message = text[len(FAILURE_PREFIX):].strip()
     low = message.lower()
     if any(marker in low for marker in _TOKEN_MARKERS):
-        return GroqFailure("tokens", message)
+        return AIFailure("tokens", message)
     if any(marker in low for marker in _ACCESS_MARKERS):
-        return GroqFailure("access", message)
+        return AIFailure("access", message)
     if any(marker in low for marker in _RATE_MARKERS):
-        return GroqFailure("rate", message)
+        return AIFailure("rate", message)
     return None

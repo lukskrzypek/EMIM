@@ -25,7 +25,7 @@ from gui.core.events import (
     SessionStarted,
     TrickCompleted,
 )
-from gui.core.groq_failures import REASONS
+from gui.core.ai_failures import REASONS
 from gui.qt.theme import ACCENT, TEXT_MUTED, enable_wrapping
 
 COLUMNS = ("Gracz", "Kontroler", "Rozdanie", "Suma", "Wygrane")

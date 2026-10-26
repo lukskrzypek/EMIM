@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from evaluation.params import Params
 from gui.core.cardtext import pretty_card
-from gui.core.bot_insight import read_groq_memory
+from gui.core.bot_insight import read_ai_memory
 from gui.core.events import GameEvent, MovePlayed, SessionFinished, SessionStarted
 from gui.core.live_evaluator import LiveAnalysis, LiveEvaluator
 from gui.core.live_quality import LiveQuality, SeatQuality
@@ -101,7 +101,7 @@ class QualityPanel(QWidget):
         has_human: bool,
         evaluator: LiveEvaluator | None,
         memory_models: Mapping[str, str] | None = None,
-        memory_reader: Callable[[str], str] = read_groq_memory,
+        memory_reader: Callable[[str], str] = read_ai_memory,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)

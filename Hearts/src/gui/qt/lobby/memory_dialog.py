@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from controllers.groq_icl_bot import DEFAULT_MEMORY_DIR
+from controllers.ai_bot import DEFAULT_MEMORY_DIR
 from gui.core.log_cleanup import MemoryFile, delete_memory_file, list_memory_files
 from gui.qt.theme import enable_wrapping
 

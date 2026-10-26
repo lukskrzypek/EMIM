@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from controllers.groq_icl_bot import DEFAULT_MODEL, USER_GUIDELINES
+from controllers.ai_bot import DEFAULT_PROVIDER, PROVIDERS, USER_GUIDELINES
 from gui.config import GUIDELINES_MAX_CHARS, NAME_MAX_CHARS, SMART_SAMPLES
 from gui.core.controllers_factory import availability_problem
 from gui.core.model_catalog import FALLBACK_MODELS
@@ -40,17 +40,19 @@ def model_key(model: str) -> str:
 
 class SeatRow(QWidget):
     changed = Signal()
-    becameGroq = Signal(object)  # this SeatRow, when its kind has just been switched to Groq
+    # This SeatRow, when it has just become an AI seat or its provider was switched.
+    becameAI = Signal(object)
 
     def __init__(
         self,
         index: int,
         default_kind: SeatKind,
-        models: Sequence[str] = FALLBACK_MODELS,
+        models: Mapping[str, Sequence[str]] = FALLBACK_MODELS,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.player_id = f"P{index}"
+        self._models = {pid: list(models.get(pid, ())) for pid in PROVIDERS}
 
         self.name = QLabel(self.player_id)
         self.name.setMinimumWidth(28)
@@ -59,10 +61,13 @@ class SeatRow(QWidget):
             self.kind.addItem(label, kind)
         self.kind.setCurrentIndex(list(SEAT_LABELS).index(default_kind))
 
+        self.provider = QComboBox()
+        for info in PROVIDERS.values():
+            self.provider.addItem(info.label, info.id)
+        self.provider.setToolTip("Które API obsługuje tego bota (każde ma własny klucz i listę modeli)")
         self.model = QComboBox()
-        self.model.addItems(list(models))  # a closed list: new models go to groq_models.txt
         self.model.setMinimumWidth(190)
-        self.model.setToolTip("Model Groq z listy w groq_models.txt")
+        self._fill_models()  # a closed list: new models go to <provider>_models.txt
         self.alias_label = QLabel("nazwa:")
         self.alias_label.setToolTip(ALIAS_TIP)
         self.alias = QLineEdit()
@@ -92,13 +97,13 @@ class SeatRow(QWidget):
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         for widget in (
-            self.name, self.kind, self.model, self.alias_label, self.alias,
+            self.name, self.kind, self.provider, self.model, self.alias_label, self.alias,
             self.samples_label, self.samples, self.samples_hint, self.note,
         ):
             top.addWidget(widget)
         top.addStretch(1)
 
-        # Extra system-prompt line for GroqICLBot (its USER_GUIDELINES constant is the default).
+        # Extra system-prompt line for AIBot (its USER_GUIDELINES constant is the default).
         self.guidelines_label = QLabel(
             f"wytyczne startowe (najlepiej po angielsku, max {GUIDELINES_MAX_CHARS} znaków):"
         )
@@ -127,8 +132,9 @@ class SeatRow(QWidget):
         layout.addLayout(top)
         layout.addLayout(bottom)
 
-        self._was_groq = default_kind is SeatKind.GROQ
+        self._was_ai = default_kind is SeatKind.AI
         self.kind.currentIndexChanged.connect(self._on_change)
+        self.provider.currentIndexChanged.connect(self._on_provider)
         self.model.currentTextChanged.connect(self._on_text)
         self.samples.valueChanged.connect(self._on_value)
         self.guidelines.textChanged.connect(self._on_text)
@@ -142,31 +148,41 @@ class SeatRow(QWidget):
     def config(self) -> SeatConfig:
         return SeatConfig(
             kind=self.seat_kind,
-            groq_model=self.model.currentText().strip() or DEFAULT_MODEL,
+            ai_model=self.model.currentText().strip() or PROVIDERS[self.provider_id].default_model,
             smart_samples=self.samples.value(),
-            groq_guidelines=clean_guidelines(self.guidelines.text()),
-            groq_name=clean_name(self.alias.text()),
+            ai_guidelines=clean_guidelines(self.guidelines.text()),
+            ai_name=clean_name(self.alias.text()),
+            ai_provider=self.provider_id,
         )
+
+    @property
+    def provider_id(self) -> str:
+        return str(self.provider.currentData() or DEFAULT_PROVIDER)
 
     def apply(self, seat: SeatConfig) -> None:
         """Show ``seat`` (restoring saved choices)."""
         self.kind.setCurrentIndex(list(SEAT_LABELS).index(seat.kind))
-        self.select_model(seat.groq_model)
+        self.provider.blockSignals(True)  # the model list is filled once, below
+        index = self.provider.findData(seat.ai_provider)
+        self.provider.setCurrentIndex(max(index, 0))
+        self.provider.blockSignals(False)
+        self._fill_models(keep=seat.ai_model)
         self.samples.setValue(seat.smart_samples)
-        self.guidelines.setText(seat.groq_guidelines)
-        self.alias.setText(seat.groq_name)
+        self.guidelines.setText(seat.ai_guidelines)
+        self.alias.setText(seat.ai_name)
+        self._on_change()  # the model list was filled with signals blocked
 
     @property
-    def is_groq(self) -> bool:
-        return self.seat_kind is SeatKind.GROQ
+    def is_ai(self) -> bool:
+        return self.seat_kind is SeatKind.AI
 
     @property
     def model_name(self) -> str:
-        return self.config().groq_model
+        return self.config().ai_model
 
     @property
     def seat_name(self) -> str:
-        return self.config().groq_name
+        return self.config().ai_name
 
     def model_names(self) -> list[str]:
         return [self.model.itemText(i) for i in range(self.model.count())]
@@ -179,19 +195,31 @@ class SeatRow(QWidget):
         self.model.setCurrentIndex(index)
         return True
 
-    def set_models(self, models: Sequence[str]) -> None:
-        """Replace the list (the file changed), keeping the current choice when it survives."""
-        models = list(models)
-        if models == self.model_names():
-            return
-        current = self.model.currentText()
+    def _fill_models(self, keep: str = "") -> None:
+        """Show the model list of the chosen provider, keeping ``keep`` selected when it is there."""
+        provider = self.provider_id
         self.model.blockSignals(True)
         self.model.clear()
-        self.model.addItems(models)
+        self.model.addItems(self._models[provider])
         self.model.blockSignals(False)
-        if not self.select_model(current):
+        if not (keep and self.select_model(keep)):
             self.model.setCurrentIndex(0)
+        self.model.setToolTip(f"Model z listy w {PROVIDERS[provider].models_path.name}")
+
+    def set_models(self, models: Mapping[str, Sequence[str]]) -> None:
+        """Replace the lists (a file changed), keeping the current choice when it survives."""
+        new = {pid: list(models.get(pid, ())) for pid in PROVIDERS}
+        if new == self._models:
+            return
+        self._models = new
+        self._fill_models(keep=self.model.currentText())
         self._on_change()
+
+    def _on_provider(self, _index: int) -> None:
+        self._fill_models()
+        self._on_change()
+        if self.is_ai:
+            self.becameAI.emit(self)  # lets the lobby move off a model another seat already plays
 
     def pick_free_model(self, taken: Mapping[str, str]) -> None:
         """Select the first listed model that nobody else plays (no-op when all are taken)."""
@@ -214,20 +242,20 @@ class SeatRow(QWidget):
 
     def _on_change(self) -> None:
         kind = self.seat_kind
-        groq = kind is SeatKind.GROQ
+        ai = kind is SeatKind.AI
         smart = kind is SeatKind.SMART
         for widget in (
-            self.model, self.alias_label, self.alias,
+            self.provider, self.model, self.alias_label, self.alias,
             self.guidelines_label, self.guidelines, self.guidelines_count,
         ):
-            widget.setVisible(groq)
+            widget.setVisible(ai)
         for widget in (self.samples_label, self.samples, self.samples_hint):
             widget.setVisible(smart)
         self.guidelines_count.setText(f"{len(self.guidelines.text())}/{GUIDELINES_MAX_CHARS}")
         problem = self.problem()
         self.note.setText(f"⚠ {problem}" if problem else "")
-        if groq and not self._was_groq:
-            self._was_groq = True
-            self.becameGroq.emit(self)
-        self._was_groq = groq
+        if ai and not self._was_ai:
+            self._was_ai = True
+            self.becameAI.emit(self)
+        self._was_ai = ai
         self.changed.emit()

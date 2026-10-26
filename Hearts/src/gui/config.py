@@ -6,12 +6,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = ROOT / "logs" / "trajectories.jsonl"
-MODELS_PATH = ROOT / "groq_models.txt"  # models offered for Groq seats, one per line
 CARDS_DIR = ROOT / "assets" / "cards"  # optional PNG deck: 2C.png ... AS.png, back.png
 
 PLAYER_COUNTS: tuple[int, ...] = (2, 3, 4, 5)
 SMART_SAMPLES = 40
-GUIDELINES_MAX_CHARS = 100  # user's extra instructions for a Groq bot
+GUIDELINES_MAX_CHARS = 100  # user's extra instructions for an AI bot
 NAME_MAX_CHARS = 10  # seat name that separates the memory files of one model
 # Players left out of the offline quality report (same default as main.py).
 IGNORED_PLAYERS: tuple[str, ...] = ("human", "smart_bot")

@@ -1,4 +1,4 @@
-"""The "Bot" tab: a seat's reasoning, thinking time and (for Groq bots) its memory pad."""
+"""The "Bot" tab: a seat's reasoning, thinking time and (for AI bots) its memory pad."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.core.bot_insight import InsightEntry, InsightModel, SeatInsight, read_groq_memory
+from gui.core.bot_insight import InsightEntry, InsightModel, SeatInsight, read_ai_memory
 from gui.core.cardtext import pretty_card
 from gui.core.events import GameEvent, MovePlayed, SessionStarted, TurnStarted
 from gui.qt.quality.widgets import VERDICT_COLORS
@@ -34,12 +34,12 @@ class BotInsightPanel(QWidget):
         human_ids: Sequence[str],
         *,
         memory_models: dict[str, str] | None = None,
-        memory_reader: Callable[[str], str] = read_groq_memory,
+        memory_reader: Callable[[str], str] = read_ai_memory,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.model = InsightModel(labels, human_ids)
-        self.memory_models = dict(memory_models or {})  # seat -> Groq model id
+        self.memory_models = dict(memory_models or {})  # seat -> AI model id
         self._read_memory = memory_reader
 
         self.seat_box = QComboBox()

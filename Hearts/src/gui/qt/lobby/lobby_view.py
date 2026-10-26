@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from PySide6.QtCore import Signal
@@ -16,10 +17,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from controllers.groq_icl_bot import DEFAULT_MEMORY_DIR
-from gui.config import MODELS_PATH, PLAYER_COUNTS
+from controllers.ai_bot import DEFAULT_MEMORY_DIR
+from gui.config import PLAYER_COUNTS
 from gui.core.lobby_state import DEFAULT_PLAYERS, LobbyState
-from gui.core.model_catalog import load_models
+from gui.core.model_catalog import load_all_models
 from gui.core.seat_config import SeatKind, SessionConfig
 from gui.qt.lobby.memory_dialog import MemoryDialog
 from gui.qt.lobby.seat_row import SeatRow, model_key
@@ -35,13 +36,14 @@ class LobbyView(QWidget):
         self,
         parent: QWidget | None = None,
         *,
-        models_path: Path = MODELS_PATH,
+        models_paths: Mapping[str, Path] | None = None,
         memory_dir: Path = DEFAULT_MEMORY_DIR,
     ) -> None:
+        """``models_paths`` maps a provider id to its model list file (default: ``<id>_models.txt``)."""
         super().__init__(parent)
         self._memory_dir = Path(memory_dir)
-        self._models_path = models_path
-        models = load_models(models_path)
+        self._models_paths = dict(models_paths or {})
+        models = load_all_models(self._models_paths)
 
         title = QLabel("Kierki")
         title.setObjectName("title")
@@ -58,7 +60,7 @@ class LobbyView(QWidget):
         for i in range(MAX_SEATS):
             row = SeatRow(i, SeatKind.HUMAN if i == 0 else SeatKind.SMART, models)
             row.changed.connect(self._update_state)
-            row.becameGroq.connect(self._give_free_model)
+            row.becameAI.connect(self._give_free_model)
             self.rows.append(row)
             seats_box.addWidget(row)
 
@@ -140,7 +142,7 @@ class LobbyView(QWidget):
 
     def refresh(self) -> None:
         """Re-read the model list and re-check seats (the API key file may exist by now)."""
-        models = load_models(self._models_path)
+        models = load_all_models(self._models_paths)
         for row in self.rows:
             row.set_models(models)
         for row in self.rows:
@@ -157,10 +159,10 @@ class LobbyView(QWidget):
         self.start_button.setEnabled(not problems)
 
     def _memory_owners(self, rows: list[SeatRow]) -> dict[str, tuple[str, list[str]]]:
-        """Groq seats by memory file: ``key -> (display name, [player ids])``."""
+        """AI seats by memory file: ``key -> (display name, [player ids])``."""
         owners: dict[str, tuple[str, list[str]]] = {}
         for row in rows:
-            if row.is_groq:
+            if row.is_ai:
                 seat = row.config()
                 owners.setdefault(seat.memory_key.strip().casefold(), (seat.display_name, []))[1].append(
                     row.player_id
@@ -171,7 +173,7 @@ class LobbyView(QWidget):
         """``model_key -> player id`` of the models played on the other visible seats."""
         taken: dict[str, str] = {}
         for other in self.rows[: self.num_players]:
-            if other is not row and other.is_groq:
+            if other is not row and other.is_ai:
                 taken.setdefault(model_key(other.model_name), other.player_id)
         return taken
 
@@ -185,7 +187,7 @@ class LobbyView(QWidget):
         ]
 
     def _give_free_model(self, row: SeatRow) -> None:
-        """A seat that has just become Groq starts on a model nobody else plays, if there is one."""
+        """A seat that has just become AI (or changed provider) starts on a model nobody else plays, if there is one."""
         taken = self._taken_by_others(row)
         if model_key(row.model_name) in taken:
             row.pick_free_model(taken)

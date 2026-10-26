@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from controllers.groq_icl_bot import DEFAULT_MEMORY_DIR, memory_filename
+from controllers.ai_bot import DEFAULT_MEMORY_DIR, memory_filename
 from gui.core.events import GameEvent, MovePlayed, SessionStarted, TurnStarted
 from gui.core.live_evaluator import LiveAnalysis
 
@@ -40,8 +40,8 @@ class SeatInsight:
         return self.think_total / self.moves if self.moves else None
 
 
-def read_groq_memory(model: str) -> str:
-    """Tail of a Groq bot's scratchpad file (``logs/memory_<model>.txt``) or a placeholder."""
+def read_ai_memory(model: str) -> str:
+    """Tail of an AI bot's scratchpad file (``logs/memory_<model>.txt``) or a placeholder."""
     path = DEFAULT_MEMORY_DIR / memory_filename(model)
     try:
         text = path.read_text(encoding="utf-8")

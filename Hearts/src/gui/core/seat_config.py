@@ -9,30 +9,31 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from controllers.groq_icl_bot import DEFAULT_MODEL
+from controllers.ai_bot import DEFAULT_MODEL, DEFAULT_PROVIDER
 from gui.config import GUIDELINES_MAX_CHARS, LOG_PATH, NAME_MAX_CHARS, PLAYER_COUNTS, SMART_SAMPLES
 
 
 class SeatKind(str, Enum):
     HUMAN = "human"
     SMART = "smart"
-    GROQ = "groq"
+    AI = "ai"
 
 
 SEAT_LABELS: dict[SeatKind, str] = {
     SeatKind.HUMAN: "Człowiek",
     SeatKind.SMART: "SmartHeartsBot",
-    SeatKind.GROQ: "GroqICLBot",
+    SeatKind.AI: "AIBot",
 }
 
 
 @dataclass(frozen=True)
 class SeatConfig:
     kind: SeatKind
-    groq_model: str = DEFAULT_MODEL
+    ai_model: str = DEFAULT_MODEL
     smart_samples: int = SMART_SAMPLES
-    groq_guidelines: str = ""  # extra system-prompt line (<= GUIDELINES_MAX_CHARS); "" = bot default
-    groq_name: str = ""  # tells two seats of one model apart (<= NAME_MAX_CHARS); "" = no suffix
+    ai_guidelines: str = ""  # extra system-prompt line (<= GUIDELINES_MAX_CHARS); "" = bot default
+    ai_name: str = ""  # tells two seats of one model apart (<= NAME_MAX_CHARS); "" = no suffix
+    ai_provider: str = DEFAULT_PROVIDER  # which API the AI seat talks to ("groq" or "openai")
 
     @property
     def label(self) -> str:
@@ -40,15 +41,15 @@ class SeatConfig:
 
     @property
     def display_name(self) -> str:
-        """What the panels call the seat: the model (with its name) for Groq, else the kind."""
-        if self.kind is SeatKind.GROQ:
-            return f"{self.groq_model} ({self.groq_name})" if self.groq_name else self.groq_model
+        """What the panels call the seat: the model (with its name) for an AI seat, else the kind."""
+        if self.kind is SeatKind.AI:
+            return f"{self.ai_model} ({self.ai_name})" if self.ai_name else self.ai_model
         return self.label
 
     @property
     def memory_key(self) -> str:
         """Model id the memory file is named after: ``<model>`` or ``<model>_<name>``."""
-        return f"{self.groq_model}_{self.groq_name}" if self.groq_name else self.groq_model
+        return f"{self.ai_model}_{self.ai_name}" if self.ai_name else self.ai_model
 
 
 def clean_guidelines(text: str) -> str:
@@ -65,12 +66,12 @@ def _memory_id(seat: SeatConfig) -> str:
     return seat.memory_key.strip().casefold()  # Windows file names ignore the case
 
 
-def duplicate_groq_memories(seats: Sequence[SeatConfig]) -> list[str]:
-    """Groq seats that would share one memory file (same model and same name)."""
+def duplicate_ai_memories(seats: Sequence[SeatConfig]) -> list[str]:
+    """AI seats that would share one memory file (same model and same name)."""
     first: dict[str, str] = {}
     count: Counter[str] = Counter()
     for seat in seats:
-        if seat.kind is SeatKind.GROQ:
+        if seat.kind is SeatKind.AI:
             key = _memory_id(seat)
             first.setdefault(key, seat.display_name)
             count[key] += 1
@@ -91,10 +92,10 @@ class SessionConfig:
             raise ValueError(f"Player count must be one of {PLAYER_COUNTS}, got {len(self.seats)}")
         if self.deals < 1:
             raise ValueError(f"Deal count must be positive, got {self.deals}")
-        if duplicates := duplicate_groq_memories(self.seats):
+        if duplicates := duplicate_ai_memories(self.seats):
             # Two seats on one memory file would overwrite each other's notes.
             raise ValueError(
-                f"Seats of one Groq model need different names, shared memory: {', '.join(duplicates)}"
+                f"Seats of one AI model need different names, shared memory: {', '.join(duplicates)}"
             )
 
     @property

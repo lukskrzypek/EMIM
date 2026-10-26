@@ -9,7 +9,7 @@ import pytest
 
 import main
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import GroqICLBot
+from controllers.ai_bot import AIBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
 from engine.game import HeartsGameEngine, PlayerObservation
@@ -52,8 +52,8 @@ def _records(path: Path) -> list[dict[str, object]]:
 def test_controllers_name_themselves() -> None:
     assert HumanCLIController().model_name == "human"
     assert SmartHeartsBot(num_samples=0).model_name == "smart_bot"
-    assert GroqICLBot("P0").model_name == "openai/gpt-oss-120b"
-    assert GroqICLBot("P0", model="other/model").model_name == "other/model"
+    assert AIBot("P0").model_name == "openai/gpt-oss-120b"
+    assert AIBot("P0", model="other/model").model_name == "other/model"
     assert _FirstLegal.model_name == "dummy-llm"
 
 

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from controllers.groq_icl_bot import (
+from controllers.ai_bot import (
     DEFAULT_API_ERROR_LOG_PATH,
     DEFAULT_EXCHANGE_LOG_PATH,
     DEFAULT_ILLEGAL_LOG_PATH,
@@ -48,7 +48,7 @@ def _label_of_trajectory(record: dict) -> str | None:
     return model if isinstance(model, str) else None
 
 
-def _label_of_groq_log(record: dict) -> str | None:
+def _label_of_ai_log(record: dict) -> str | None:
     model = record.get("model")
     if not isinstance(model, str):
         return None
@@ -158,7 +158,7 @@ def delete_bot_records(
     illegal_path: str | Path | None = DEFAULT_ILLEGAL_LOG_PATH,
     api_error_path: str | Path | None = DEFAULT_API_ERROR_LOG_PATH,
 ) -> DeletedRecords:
-    """Remove the bot ``label`` from the trajectory log and the Groq logs.
+    """Remove the bot ``label`` from the trajectory log and the AI logs.
 
     In the trajectory log its deals go away whole (see ``_trajectory_plan``); in the bot's own
     logs only its own records do.
@@ -169,9 +169,9 @@ def delete_bot_records(
     return DeletedRecords(
         trajectories=own,
         other_trajectories=others,
-        exchanges=_rewrite_without(Path(exchange_path), label, _label_of_groq_log) if exchange_path else 0,
-        illegal=_rewrite_without(Path(illegal_path), label, _label_of_groq_log) if illegal_path else 0,
-        api_errors=_rewrite_without(Path(api_error_path), label, _label_of_groq_log) if api_error_path else 0,
+        exchanges=_rewrite_without(Path(exchange_path), label, _label_of_ai_log) if exchange_path else 0,
+        illegal=_rewrite_without(Path(illegal_path), label, _label_of_ai_log) if illegal_path else 0,
+        api_errors=_rewrite_without(Path(api_error_path), label, _label_of_ai_log) if api_error_path else 0,
     )
 
 

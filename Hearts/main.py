@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import GroqICLBot
+from controllers.ai_bot import PROVIDERS, AIBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
 from engine.game import HeartsGameEngine
@@ -29,7 +29,7 @@ IGNORED_PLAYERS: tuple[str, ...] = ("human", "smart_bot")
 CONTROLLER_CHOICES: tuple[tuple[str, str], ...] = (
     ("human", "Człowiek"),
     ("smart", "SmartHeartsBot"),
-    ("groq", "GroqICLBot"),
+    *((provider.id, f"AIBot ({provider.label})") for provider in PROVIDERS.values()),
 )
 
 
@@ -187,8 +187,8 @@ def _make_controller(kind: str, player_id: str, seat: int) -> PlayerController:
         return HumanCLIController()
     if kind == "smart":
         return SmartHeartsBot(num_samples=SAMPLES, seed=seat)
-    if kind == "groq":
-        return GroqICLBot(player_id, trajectories_path=LOG_PATH)
+    if kind in PROVIDERS:  # the choice key is the provider id
+        return AIBot(player_id, provider=kind, trajectories_path=LOG_PATH)
     raise ValueError(f"Unknown controller: {kind!r}")
 
 

@@ -75,9 +75,9 @@ class ReportView(QWidget):
         super().__init__(parent)
         self.log_path = Path(log_path)
         # the bot's own logs live next to the trajectory log
-        self.exchange_path = Path(exchange_path or self.log_path.with_name("groq_exchanges.jsonl"))
-        self.illegal_path = Path(illegal_path or self.log_path.with_name("groq_illegal_moves.jsonl"))
-        self.api_error_path = Path(api_error_path or self.log_path.with_name("groq_api_errors.jsonl"))
+        self.exchange_path = Path(exchange_path or self.log_path.with_name("ai_exchanges.jsonl"))
+        self.illegal_path = Path(illegal_path or self.log_path.with_name("ai_illegal_moves.jsonl"))
+        self.api_error_path = Path(api_error_path or self.log_path.with_name("ai_api_errors.jsonl"))
         self.settings = settings
         self.result: ReportResult | None = None
         self._ranked: list[ModelQuality] = []
@@ -102,8 +102,8 @@ class ReportView(QWidget):
         self.copy_button.setEnabled(False)
         self.delete_button = QPushButton("Usuń statystyki bota")
         self.delete_button.setToolTip(
-            "Usuwa z logów rekordy zaznaczonego bota (trajectories, groq_exchanges, "
-            "groq_illegal_moves, groq_api_errors) razem z pozostałymi ruchami z jego rozdań. Nie da się tego cofnąć."
+            "Usuwa z logów rekordy zaznaczonego bota (trajectories, ai_exchanges, "
+            "ai_illegal_moves, ai_api_errors) razem z pozostałymi ruchami z jego rozdań. Nie da się tego cofnąć."
         )
         self.delete_button.setEnabled(False)
         self.back_button = QPushButton("Wróć do lobby")

@@ -1,4 +1,4 @@
-"""LLM controller: In-Context Learning over the Groq API (few-shot from trajectories)."""
+"""LLM controller: In-Context Learning over an OpenAI-compatible chat API (Groq or OpenAI)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import logging
 import random
 import re
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,19 +16,58 @@ from engine.game import PlayerObservation
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "openai/gpt-oss-120b"
-DEFAULT_API_KEY_PATH = Path(__file__).resolve().parents[2] / "groq_api_key.txt"
-DEFAULT_EXCHANGE_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_exchanges.jsonl"
-DEFAULT_ILLEGAL_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_illegal_moves.jsonl"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class Provider:
+    """One API the bot can talk to: its SDK package, key file, model list file and default model."""
+
+    id: str
+    label: str
+    package: str  # name of the pip package, which is also the import name
+    key_path: Path
+    models_path: Path
+    default_model: str
+
+
+PROVIDERS: dict[str, Provider] = {
+    "groq": Provider(
+        "groq", "Groq", "groq",
+        _PROJECT_ROOT / "groq_api_key.txt", _PROJECT_ROOT / "groq_models.txt",
+        "openai/gpt-oss-120b",
+    ),
+    "openai": Provider(
+        "openai", "OpenAI", "openai",
+        _PROJECT_ROOT / "openai_api_key.txt", _PROJECT_ROOT / "openai_models.txt",
+        "gpt-4o-mini",
+    ),
+}
+DEFAULT_PROVIDER = "groq"
+DEFAULT_MODEL = PROVIDERS[DEFAULT_PROVIDER].default_model
+
+
+def get_provider(provider: str) -> Provider:
+    try:
+        return PROVIDERS[provider]
+    except KeyError:
+        raise ValueError(f"Unknown provider {provider!r}; choose one of {', '.join(PROVIDERS)}") from None
+
+
+DEFAULT_EXCHANGE_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "ai_exchanges.jsonl"
+DEFAULT_ILLEGAL_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "ai_illegal_moves.jsonl"
 # Requests the API refused (quota, unknown model, rate limit ...). Replies that came back but
 # were no legal card go to the illegal-move log instead.
-DEFAULT_API_ERROR_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "groq_api_errors.jsonl"
+DEFAULT_API_ERROR_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "ai_api_errors.jsonl"
 DEFAULT_MEMORY_DIR = Path(__file__).resolve().parents[2] / "logs"
 
 _CARD_RE = re.compile(r"\b[2-9TJQKA][CDSH]\b")
 _CARD_KEY_RE = re.compile(r'"card"\s*:\s*"([2-9TJQKA][CDHS])"', re.IGNORECASE)
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
-_TOKEN_LIMIT_RE = re.compile(r"less than or equal to\s*`?(\d+)")
+# Groq: "... less than or equal to `8192`"; OpenAI: "... supports at most 16384 completion tokens".
+_TOKEN_LIMIT_RE = re.compile(r"(?:less than or equal to\s*`?|supports at most\s*)(\d+)")
+# OpenAI reasoning models (o1, o3, gpt-5 ...) take reasoning_effort; gpt-4o and older do not.
+_OPENAI_REASONING_RE = re.compile(r"^(o\d|gpt-5)", re.IGNORECASE)
 # Words of a 400 that mean "this model does not take this response_format".
 _FORMAT_ERROR_MARKERS = (
     "response_format",
@@ -104,10 +144,10 @@ def memory_filename(model: str) -> str:
     return f"memory_{safe}.txt"
 
 
-def read_api_key(path: Path) -> str:
+def read_api_key(path: Path, provider: str = DEFAULT_PROVIDER) -> str:
     """Return the key from the first non-empty line of ``path``."""
     if not path.is_file():
-        raise RuntimeError(f"Put the Groq API key in {path} (one line).")
+        raise RuntimeError(f"Put the {get_provider(provider).label} API key in {path} (one line).")
     for line in path.read_text(encoding="utf-8").splitlines():
         key = line.strip().strip('"').strip("'")
         if key:
@@ -243,9 +283,9 @@ def decision_response_format(legal_moves: list[str]) -> dict[str, Any]:
 def response_format_for(level: int, legal_moves: list[str]) -> dict[str, Any] | None:
     """Reply constraint by strictness: 0 = strict schema, 1 = any JSON object, 2 = none.
 
-    Only the gpt-oss models take the strict schema. Other Groq models (meta-llama ...) take
-    plain JSON mode at best; the prompt asks for the same JSON either way and ``parse_card``
-    checks the card against the legal moves.
+    On Groq only the gpt-oss models take the strict schema (meta-llama ... take plain JSON mode
+    at best); OpenAI chat models take it too. The prompt asks for the same JSON either way and
+    ``parse_card`` checks the card against the legal moves.
     """
     if level <= 0:
         return decision_response_format(legal_moves)
@@ -280,15 +320,23 @@ def reply_text(message: Any) -> str:
     return json.dumps(payload)
 
 
-class GroqICLBot(PlayerController):
-    """Plays one seat by prompting a Groq-hosted LLM with few-shot examples."""
+def _default_reasoning_effort(provider: str, model: str) -> str | None:
+    """``"low"`` for reasoning models, so the token budget is left for the JSON answer."""
+    if provider == "groq":
+        return "low" if "gpt-oss" in model else None
+    return "low" if _OPENAI_REASONING_RE.match(model.strip()) else None
+
+
+class AIBot(PlayerController):
+    """Plays one seat by prompting an LLM (Groq or OpenAI) with optional few-shot examples."""
 
     def __init__(
         self,
         player_id: str,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         trajectories_path: str | Path | None = None,
         *,
+        provider: str = DEFAULT_PROVIDER,
         num_examples: int = 0,
         example_selection: Literal["last", "random"] = "last",
         temperature: float = 0.0,
@@ -307,7 +355,10 @@ class GroqICLBot(PlayerController):
     ) -> None:
         if example_selection not in ("last", "random"):
             raise ValueError(f"example_selection must be 'last' or 'random', got {example_selection!r}")
+        info = get_provider(provider)
+        model = model or info.default_model
         self.player_id = player_id
+        self.provider = info.id
         self.model = model
         # Tells two bots of one model apart: it ends up in model_name (so in trajectories.jsonl),
         # in the name of the memory file and in the exchange / illegal-move logs.
@@ -316,10 +367,14 @@ class GroqICLBot(PlayerController):
         self.trajectories_path = Path(trajectories_path) if trajectories_path else None
         self._num_examples = num_examples
         self._selection: Literal["last", "random"] = example_selection
-        self._temperature = temperature
+        # ``None`` (set when the API refuses the value) leaves the parameter out of the request.
+        self._temperature: float | None = temperature
         self._max_tokens = max_tokens
+        # OpenAI's newer models only take max_completion_tokens; Groq still takes max_tokens.
+        self._token_param = "max_completion_tokens" if info.id == "openai" else "max_tokens"
+        self._reasoning_effort = _default_reasoning_effort(info.id, model)
         self._api_key = api_key
-        self._api_key_path = Path(api_key_path) if api_key_path is not None else DEFAULT_API_KEY_PATH
+        self._api_key_path = Path(api_key_path) if api_key_path is not None else info.key_path
         # None means the project log. Tests can point the default at nothing.
         chosen_log = DEFAULT_EXCHANGE_LOG_PATH if exchange_log_path is None else exchange_log_path
         self._exchange_log_path = Path(chosen_log) if chosen_log else None
@@ -340,7 +395,8 @@ class GroqICLBot(PlayerController):
             self._memory_path.touch(exist_ok=True)
         self._client = client
         # How strictly the reply is constrained; relaxed when the API refuses (see ``_create``).
-        self._format_level = 0 if "gpt-oss" in model else 1
+        # Groq takes the strict schema on gpt-oss only; OpenAI chat models take it as a rule.
+        self._format_level = 1 if info.id == "groq" and "gpt-oss" not in model else 0
         self._rng = random.Random(seed)
         # None uses USER_GUIDELINES; "" turns the extra instructions off.
         self._guidelines = USER_GUIDELINES if guidelines is None else guidelines
@@ -353,14 +409,24 @@ class GroqICLBot(PlayerController):
     # ------------------------------------------------------------------ API
 
     def _get_client(self) -> Any:
-        """Create the Groq SDK client lazily (needs ``groq`` and ``groq_api_key.txt``)."""
+        """Create the provider's SDK client lazily (needs its package and its key file)."""
         if self._client is None:
-            key = self._api_key if self._api_key is not None else read_api_key(self._api_key_path)
+            info = get_provider(self.provider)
+            key = (
+                self._api_key
+                if self._api_key is not None
+                else read_api_key(self._api_key_path, self.provider)
+            )
             try:
-                from groq import Groq
+                if self.provider == "openai":
+                    from openai import OpenAI as Client
+                else:
+                    from groq import Groq as Client
             except ImportError as exc:  # pragma: no cover - depends on environment
-                raise RuntimeError("Install the Groq SDK: pip install groq") from exc
-            self._client = Groq(api_key=key)
+                raise RuntimeError(
+                    f"Install the {info.label} SDK: pip install {info.package}"
+                ) from exc
+            self._client = Client(api_key=key)
         return self._client
 
     # --------------------------------------------------------------- prompts
@@ -411,23 +477,25 @@ class GroqICLBot(PlayerController):
         request: dict[str, Any] = {
             "model": self.model,
             "messages": self.build_messages(observation),
-            "temperature": self._temperature,
-            "max_tokens": self._max_tokens,
+            self._token_param: self._max_tokens,
         }
+        if self._temperature is not None:
+            request["temperature"] = self._temperature
         response_format = response_format_for(self._format_level, legal)
         if response_format is not None:
             request["response_format"] = response_format
-        # gpt-oss writes a long chain of thought first. "low" leaves room
-        # for the JSON answer in content. The thought stays on message.reasoning.
-        if "gpt-oss" in self.model:
-            request["reasoning_effort"] = "low"
+        # Reasoning models (gpt-oss, o-series, gpt-5) write a long chain of thought first.
+        # "low" leaves room for the JSON answer in content. On Groq the thought stays on
+        # message.reasoning.
+        if self._reasoning_effort is not None:
+            request["reasoning_effort"] = self._reasoning_effort
         try:
             response = self._create(client, request, legal)
             message = response.choices[0].message
             text = reply_text(message)
             self.last_reasoning = decision_reasoning(message, text)
         except Exception as exc:  # network / API / quota errors must not stop the game
-            logger.warning("Groq request failed (%s); playing first legal move", exc)
+            logger.warning("AI request failed (%s); playing first legal move", exc)
             self.last_reasoning = f"request failed: {exc}"
             self._log_exchange(request, None, legal[0], error=str(exc))
             self._log_api_error(exc, legal, legal[0])
@@ -439,7 +507,7 @@ class GroqICLBot(PlayerController):
 
         move = parse_card(text, legal)
         if move is None:
-            logger.warning("Illegal or unparsable Groq reply %r; playing first legal move", text)
+            logger.warning("Illegal or unparsable AI reply %r; playing first legal move", text)
             if not self.last_reasoning:
                 self.last_reasoning = text.strip()
             attempted = _attempted_card(text)
@@ -457,10 +525,11 @@ class GroqICLBot(PlayerController):
     def _create(self, client: Any, request: dict[str, Any], legal: list[str]) -> Any:
         """Send ``request``; a 400 about the token limit or the response format is fixed and retried.
 
-        Models differ: meta-llama has no strict JSON schema, some models cap ``max_tokens``.
+        Models differ: meta-llama has no strict JSON schema, some models cap ``max_tokens``,
+        OpenAI reasoning models refuse ``temperature`` or ``reasoning_effort``.
         What the API taught us is remembered, so the next move is not refused again.
         """
-        for _ in range(3):
+        for _ in range(5):
             try:
                 return client.chat.completions.create(**request)
             except Exception as exc:
@@ -475,11 +544,19 @@ class GroqICLBot(PlayerController):
         message = str(exc)
         lowered = message.lower()
         limit = _TOKEN_LIMIT_RE.search(message)
-        if "max_tokens" in lowered and limit is not None:
+        if ("max_tokens" in lowered or "max_completion_tokens" in lowered) and limit is not None:
             allowed = int(limit.group(1))
-            if 0 < allowed < request["max_tokens"]:
-                self._max_tokens = request["max_tokens"] = allowed
+            if 0 < allowed < request[self._token_param]:
+                self._max_tokens = request[self._token_param] = allowed
                 return True
+        if "temperature" in lowered and "temperature" in request:
+            del request["temperature"]
+            self._temperature = None
+            return True
+        if "reasoning_effort" in lowered and "reasoning_effort" in request:
+            del request["reasoning_effort"]
+            self._reasoning_effort = None
+            return True
         if self._format_level < 2 and any(marker in lowered for marker in _FORMAT_ERROR_MARKERS):
             self._format_level += 1
             request.pop("response_format", None)
@@ -514,6 +591,7 @@ class GroqICLBot(PlayerController):
             return
         record = {
             "player_id": self.player_id,
+            "provider": self.provider,
             "model": self.model,
             "name": self.name,
             "status_code": getattr(exc, "status_code", None),
@@ -526,7 +604,7 @@ class GroqICLBot(PlayerController):
             with self._api_error_log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         except OSError as log_exc:
-            logger.warning("Could not write Groq API-error log (%s)", log_exc)
+            logger.warning("Could not write AI API-error log (%s)", log_exc)
 
     def _log_illegal(
         self,
@@ -543,6 +621,7 @@ class GroqICLBot(PlayerController):
             return
         record = {
             "player_id": self.player_id,
+            "provider": self.provider,
             "model": self.model,
             "name": self.name,
             "kind": kind,
@@ -558,7 +637,7 @@ class GroqICLBot(PlayerController):
             with self._illegal_log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         except OSError as exc:
-            logger.warning("Could not write Groq illegal-move log (%s)", exc)
+            logger.warning("Could not write AI illegal-move log (%s)", exc)
 
     def _log_exchange(
         self,
@@ -568,7 +647,7 @@ class GroqICLBot(PlayerController):
         *,
         error: str | None = None,
     ) -> None:
-        """Append the prompt sent to Groq and the raw reply. Never includes the API key."""
+        """Append the prompt sent to the API and the raw reply. Never includes the API key."""
         if self._exchange_log_path is None:
             return
         if message is None:
@@ -584,6 +663,7 @@ class GroqICLBot(PlayerController):
             }
         record = {
             "player_id": self.player_id,
+            "provider": self.provider,
             "model": request.get("model", self.model),
             "name": self.name,
             "messages": request.get("messages", []),
@@ -597,4 +677,4 @@ class GroqICLBot(PlayerController):
             with self._exchange_log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         except OSError as exc:
-            logger.warning("Could not write Groq exchange log (%s)", exc)
+            logger.warning("Could not write AI exchange log (%s)", exc)

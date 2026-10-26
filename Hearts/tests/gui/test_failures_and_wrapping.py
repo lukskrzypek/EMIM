@@ -1,4 +1,4 @@
-"""Groq out-of-tokens detection, wrapped log views, no Qt warning from the quality table."""
+"""AI out-of-tokens detection, wrapped log views, no Qt warning from the quality table."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from PySide6.QtWidgets import QMessageBox
 
 from collector import Collector
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import GroqICLBot
+from controllers.ai_bot import AIBot
 from controllers.smart_bot import SmartHeartsBot
 from engine.game import HeartsGameEngine, PlayerObservation
 from gui.core.events import BotUnavailable, MovePlayed, Notice, SessionFinished
 from gui.core.game_runner import GameRunner
-from gui.core.groq_failures import classify_failure
+from gui.core.ai_failures import classify_failure
 from gui.core.live_evaluator import LiveEvaluator
 from gui.core.pace import PaceControl
 from gui.core.seat_config import SeatConfig, SeatKind, SessionConfig
@@ -65,8 +65,8 @@ class FailsFrom(PlayerController):
 
 
 def _config(n: int = 2) -> SessionConfig:
-    return SessionConfig(tuple(SeatConfig(SeatKind.GROQ if i == 0 else SeatKind.SMART,
-                                          groq_model="m/x", smart_samples=0) for i in range(n)),
+    return SessionConfig(tuple(SeatConfig(SeatKind.AI if i == 0 else SeatKind.SMART,
+                                          ai_model="m/x", smart_samples=0) for i in range(n)),
                          log_path=None)
 
 
@@ -124,12 +124,12 @@ def test_a_per_minute_limit_only_warns() -> None:
     assert any("limit" in n.text for n in sink.of(Notice))
 
 
-def test_a_real_groq_bot_with_no_tokens_stops_the_game() -> None:
+def test_a_real_ai_bot_with_no_tokens_stops_the_game() -> None:
     def refuse(**_kw):  # type: ignore[no-untyped-def]
         raise RuntimeError(DAILY.removeprefix("request failed: "))
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=refuse)))
-    bot = GroqICLBot("P0", client=client, exchange_log_path="", illegal_log_path="", api_error_log_path="", memory_path=None)
+    bot = AIBot("P0", client=client, exchange_log_path="", illegal_log_path="", api_error_log_path="", memory_path=None)
     sink = _run(bot)
     assert sink.of(BotUnavailable)[0].reason == "tokens"
     assert sink.wait_finished().aborted
@@ -192,7 +192,7 @@ def _move(player: str) -> MovePlayed:
     return MovePlayed(1, 1, player, "2C", "m", 0.1, "", None, None)  # type: ignore[arg-type]
 
 
-def test_quality_panel_shows_the_memory_of_every_groq_bot(qtbot) -> None:  # type: ignore[no-untyped-def]
+def test_quality_panel_shows_the_memory_of_every_ai_bot(qtbot) -> None:  # type: ignore[no-untyped-def]
     files = {"m/a": "plan A", "m/b": "plan B"}
     panel = QualityPanel(
         {"P0": "Człowiek", "P1": "m/a", "P2": "m/b"}, has_human=True, evaluator=None,
@@ -217,17 +217,17 @@ def test_quality_panel_shows_the_memory_of_every_groq_bot(qtbot) -> None:  # typ
     assert board.pads["P2"].toPlainText() == "plan B, revised"
 
 
-def test_memory_card_is_hidden_without_groq_bots(qtbot) -> None:  # type: ignore[no-untyped-def]
+def test_memory_card_is_hidden_without_ai_bots(qtbot) -> None:  # type: ignore[no-untyped-def]
     panel = QualityPanel({"P0": "A", "P1": "B"}, has_human=False, evaluator=None)
     qtbot.addWidget(panel)
     panel.show()
     assert not panel.memory_board.isVisible() and not panel.memory_board.pads
 
 
-def test_game_view_gives_the_stats_panel_the_groq_seats(qtbot) -> None:  # type: ignore[no-untyped-def]
+def test_game_view_gives_the_stats_panel_the_ai_seats(qtbot) -> None:  # type: ignore[no-untyped-def]
     config = SessionConfig(
-        (SeatConfig(SeatKind.GROQ, groq_model="m/a"), SeatConfig(SeatKind.SMART, smart_samples=0),
-         SeatConfig(SeatKind.GROQ, groq_model="m/a", groq_name="twin")),  # same model, own pad
+        (SeatConfig(SeatKind.AI, ai_model="m/a"), SeatConfig(SeatKind.SMART, smart_samples=0),
+         SeatConfig(SeatKind.AI, ai_model="m/a", ai_name="twin")),  # same model, own pad
         log_path=None,
     )
     session = SessionController(config, controllers={
@@ -250,14 +250,14 @@ def test_game_view_gives_the_stats_panel_the_groq_seats(qtbot) -> None:  # type:
 def test_trajectory_log_tells_two_bots_of_one_model_apart(tmp_path) -> None:  # type: ignore[no-untyped-def]
     import json
 
-    def groq(pid: str, name: str = "") -> GroqICLBot:
+    def ai(pid: str, name: str = "") -> AIBot:
         reply = SimpleNamespace(content="no card here")  # unparsable: the bot plays its fallback
         client = SimpleNamespace(
             chat=SimpleNamespace(
                 completions=SimpleNamespace(create=lambda **_: SimpleNamespace(choices=[SimpleNamespace(message=reply)]))
             )
         )
-        return GroqICLBot(
+        return AIBot(
             pid, model="m/x", name=name, client=client, exchange_log_path="", illegal_log_path="", api_error_log_path="",
             memory_path=tmp_path / f"{pid}.txt",
         )
@@ -265,8 +265,8 @@ def test_trajectory_log_tells_two_bots_of_one_model_apart(tmp_path) -> None:  # 
     log = tmp_path / "trajectories.jsonl"
     config = SessionConfig(
         (
-            SeatConfig(SeatKind.GROQ, groq_model="m/x"),  # no name: logged as before
-            SeatConfig(SeatKind.GROQ, groq_model="m/x", groq_name="bold"),
+            SeatConfig(SeatKind.AI, ai_model="m/x"),  # no name: logged as before
+            SeatConfig(SeatKind.AI, ai_model="m/x", ai_name="bold"),
             SeatConfig(SeatKind.SMART, smart_samples=0),
         ),
         log_path=log,
@@ -274,7 +274,7 @@ def test_trajectory_log_tells_two_bots_of_one_model_apart(tmp_path) -> None:  # 
     sink = Collector()
     runner = GameRunner(
         config, sink, pace=PaceControl(0),
-        controllers={"P0": groq("P0"), "P1": groq("P1", "bold"), "P2": SmartHeartsBot(num_samples=0, seed=2)},
+        controllers={"P0": ai("P0"), "P1": ai("P1", "bold"), "P2": SmartHeartsBot(num_samples=0, seed=2)},
         engine_factory=_factory(3),
         analyzer=LiveEvaluator(),
     )

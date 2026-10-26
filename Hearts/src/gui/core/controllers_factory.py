@@ -6,7 +6,7 @@ import importlib.util
 from pathlib import Path
 
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import DEFAULT_API_KEY_PATH, GroqICLBot, read_api_key
+from controllers.ai_bot import AIBot, get_provider, read_api_key
 from controllers.smart_bot import SmartHeartsBot
 from gui.config import LOG_PATH
 from gui.core.human_controller import HumanGuiController
@@ -25,26 +25,31 @@ def build_controller(
         return HumanGuiController()
     if seat.kind is SeatKind.SMART:
         return SmartHeartsBot(num_samples=seat.smart_samples, seed=index)
-    if seat.kind is SeatKind.GROQ:
-        return GroqICLBot(
+    if seat.kind is SeatKind.AI:
+        return AIBot(
             player_id,
-            model=seat.groq_model,
+            model=seat.ai_model,
+            provider=seat.ai_provider,
             trajectories_path=trajectories_path,  # few-shot stays off: num_examples defaults to 0
-            name=seat.groq_name,  # -> model_name, memory file ..._<name>.txt and the bot's logs
-            # empty -> None keeps the bot's own default (USER_GUIDELINES in groq_icl_bot.py)
-            guidelines=clean_guidelines(seat.groq_guidelines) or None,
+            name=seat.ai_name,  # -> model_name, memory file ..._<name>.txt and the bot's logs
+            # empty -> None keeps the bot's own default (USER_GUIDELINES in ai_bot.py)
+            guidelines=clean_guidelines(seat.ai_guidelines) or None,
         )
     raise ValueError(f"Unknown seat kind: {seat.kind!r}")
 
 
-def availability_problem(seat: SeatConfig, api_key_path: Path = DEFAULT_API_KEY_PATH) -> str | None:
-    """Why this seat could not play (missing SDK or key), or ``None`` when it is ready."""
-    if seat.kind is not SeatKind.GROQ:
+def availability_problem(seat: SeatConfig, api_key_path: Path | None = None) -> str | None:
+    """Why this seat could not play (missing SDK or key), or ``None`` when it is ready.
+
+    ``api_key_path`` overrides the key file of the seat's provider.
+    """
+    if seat.kind is not SeatKind.AI:
         return None
-    if importlib.util.find_spec("groq") is None:
-        return "Brak pakietu 'groq' (pip install groq)."
+    provider = get_provider(seat.ai_provider)
+    if importlib.util.find_spec(provider.package) is None:
+        return f"Brak pakietu '{provider.package}' (pip install {provider.package})."
     try:
-        read_api_key(api_key_path)
+        read_api_key(api_key_path or provider.key_path, provider.id)
     except RuntimeError as exc:
         return str(exc)
     return None

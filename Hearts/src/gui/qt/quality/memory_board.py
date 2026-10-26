@@ -1,4 +1,4 @@
-"""Statistics card with the memory pad (scratchpad) of every Groq bot playing in this game."""
+"""Statistics card with the memory pad (scratchpad) of every AI bot playing in this game."""
 
 from __future__ import annotations
 
@@ -6,25 +6,25 @@ from collections.abc import Callable, Mapping
 
 from PySide6.QtWidgets import QFrame, QLabel, QPlainTextEdit, QVBoxLayout, QWidget
 
-from gui.core.bot_insight import read_groq_memory
+from gui.core.bot_insight import read_ai_memory
 
 PAD_HEIGHT = 96
 
 
 class MemoryBoard(QFrame):
-    """One header and one read-only text per Groq seat; hidden when nobody has a memory."""
+    """One header and one read-only text per AI seat; hidden when nobody has a memory."""
 
     def __init__(
         self,
         seat_models: Mapping[str, str],
         seat_labels: Mapping[str, str] | None = None,
         *,
-        reader: Callable[[str], str] = read_groq_memory,
+        reader: Callable[[str], str] = read_ai_memory,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("card")
-        self.seat_models = dict(seat_models)  # seat id -> Groq model id
+        self.seat_models = dict(seat_models)  # seat id -> AI model id
         self._labels = dict(seat_labels or {})
         self._reader = reader
         self.headers: dict[str, QLabel] = {}

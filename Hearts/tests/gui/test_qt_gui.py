@@ -83,21 +83,21 @@ def test_lobby_defaults_and_config(qtbot) -> None:  # type: ignore[no-untyped-de
 
     lobby.players.setCurrentIndex(0)  # 2 players
     lobby.deals.setValue(5)
-    lobby.rows[1].kind.setCurrentIndex(2)  # Groq
+    lobby.rows[1].kind.setCurrentIndex(2)  # AI
     config = lobby.build_config()
     assert config.num_players == 2 and config.deals == 5 and config.seed is None
-    assert config.seats[1].kind is SeatKind.GROQ
+    assert config.seats[1].kind is SeatKind.AI
     assert not hasattr(lobby, "seed") and not hasattr(lobby, "fixed_seed")  # no fixed deal in the GUI
 
 
-def test_lobby_blocks_start_when_groq_is_unavailable(qtbot, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_lobby_blocks_start_when_ai_is_unavailable(qtbot, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(
         seat_row, "availability_problem",
-        lambda seat: "brak klucza" if seat.kind is SeatKind.GROQ else None,
+        lambda seat: "brak klucza" if seat.kind is SeatKind.AI else None,
     )
     lobby = LobbyView()
     qtbot.addWidget(lobby)
-    assert lobby.start_button.isEnabled()  # nobody plays Groq yet
+    assert lobby.start_button.isEnabled()  # nobody plays AI yet
     lobby.rows[2].kind.setCurrentIndex(2)
     assert not lobby.start_button.isEnabled()
     assert "brak klucza" in lobby.message.text()
@@ -113,11 +113,11 @@ def _models_file(tmp_path, *names: str):  # type: ignore[no-untyped-def]
 
 def test_one_model_may_sit_twice_when_the_seats_have_different_names(qtbot, monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(seat_row, "availability_problem", lambda seat: None)  # pretend a key exists
-    lobby = LobbyView(models_path=_models_file(tmp_path, "a/one", "b/two"))
+    lobby = LobbyView(models_paths={"groq": _models_file(tmp_path, "a/one", "b/two")})
     qtbot.addWidget(lobby)
     first, second, third = lobby.rows[1], lobby.rows[2], lobby.rows[3]
-    first.kind.setCurrentIndex(2)  # Groq
-    second.kind.setCurrentIndex(2)  # Groq: starts on a model the first seat does not play
+    first.kind.setCurrentIndex(2)  # AI
+    second.kind.setCurrentIndex(2)  # AI: starts on a model the first seat does not play
     assert {first.model_name, second.model_name} == {"a/one", "b/two"}
     assert lobby.start_button.isEnabled() and not lobby.message.text()
 
@@ -129,10 +129,10 @@ def test_one_model_may_sit_twice_when_the_seats_have_different_names(qtbot, monk
     second.alias.setText("bold")  # one seat named: the files differ
     assert not lobby.message.text() and lobby.start_button.isEnabled()
     config = lobby.build_config()
-    assert config.seats[1].groq_name == "" and config.seats[2].groq_name == "bold"
+    assert config.seats[1].ai_name == "" and config.seats[2].ai_name == "bold"
     assert config.seats[2].display_name == f"{first.model_name} (bold)"
 
-    third.kind.setCurrentIndex(2)  # Groq again: takes the model nobody plays yet
+    third.kind.setCurrentIndex(2)  # AI again: takes the model nobody plays yet
     assert third.model_name == "b/two" and lobby.start_button.isEnabled()
     third.select_model(first.model_name)  # the model of the unnamed first seat: shared pad
     assert "wspólną pamięć" in lobby.message.text() and "P1, P3" in lobby.message.text()
@@ -151,13 +151,13 @@ def test_seat_name_is_short_and_safe_for_a_file_name(qtbot) -> None:  # type: ig
     row = lobby.rows[1]
     assert row.alias.maxLength() == 10
     lobby.show()
-    row.kind.setCurrentIndex(2)  # Groq: the field is visible
+    row.kind.setCurrentIndex(2)  # AI: the field is visible
     row.alias.setFocus()
     qtbot.keyClicks(row.alias, "a b/c*d-_1")  # typed key by key: what is not allowed is dropped
     assert row.alias.text() == "abcd-_1"
     qtbot.keyClicks(row.alias, "wxyz")  # only 10 characters fit
     assert row.alias.text() == "abcd-_1wxy"
-    assert lobby.build_config().seats[1].groq_name == "abcd-_1wxy"
+    assert lobby.build_config().seats[1].ai_name == "abcd-_1wxy"
     accepted = QValidator.State.Acceptable  # letters of any alphabet are fine, symbols are not
     assert row.alias.validator().validate("zażółć", 0)[0] == accepted
     assert row.alias.validator().validate("a:b", 0)[0] != accepted
@@ -165,7 +165,7 @@ def test_seat_name_is_short_and_safe_for_a_file_name(qtbot) -> None:  # type: ig
 
 def test_model_choice_is_a_closed_list_read_from_a_file(qtbot, tmp_path) -> None:  # type: ignore[no-untyped-def]
     path = _models_file(tmp_path, "a/one", "b/two")
-    lobby = LobbyView(models_path=path)
+    lobby = LobbyView(models_paths={"groq": path})
     qtbot.addWidget(lobby)
     row = lobby.rows[1]
     assert not row.model.isEditable()
@@ -179,6 +179,38 @@ def test_model_choice_is_a_closed_list_read_from_a_file(qtbot, tmp_path) -> None
     path.write_text("a/one\n", encoding="utf-8")  # the chosen model was removed
     lobby.refresh()
     assert row.model_names() == ["a/one"] and row.model_name == "a/one"
+
+
+def test_ai_seat_chooses_a_provider_with_its_own_model_list(qtbot, monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(seat_row, "availability_problem", lambda seat: None)
+    openai_file = tmp_path / "openai_models.txt"
+    openai_file.write_text("gpt-x\ngpt-y\n", encoding="utf-8")
+    lobby = LobbyView(models_paths={"groq": _models_file(tmp_path, "a/one"), "openai": openai_file})
+    qtbot.addWidget(lobby)
+    lobby.show()
+    row = lobby.rows[1]
+    assert not row.provider.isVisible()  # only AI seats have it
+    row.kind.setCurrentIndex(2)
+    assert row.provider.isVisible() and [row.provider.itemText(i) for i in range(2)] == ["Groq", "OpenAI"]
+    assert row.provider_id == "groq" and row.model_names() == ["a/one"]
+
+    row.provider.setCurrentIndex(1)
+    assert row.model_names() == ["gpt-x", "gpt-y"] and "openai_models.txt" in row.model.toolTip()
+    config = lobby.build_config().seats[1]
+    assert (config.ai_provider, config.ai_model) == ("openai", "gpt-x")
+
+    row.select_model("gpt-y")
+    state = lobby.state()
+    row.provider.setCurrentIndex(0)
+    row.apply(state.seats[1])  # restoring a saved choice switches the provider and the list back
+    assert row.provider_id == "openai" and row.model_name == "gpt-y"
+
+    other = lobby.rows[2]
+    other.kind.setCurrentIndex(2)
+    other.provider.setCurrentIndex(1)  # gpt-x is free, gpt-y is played by P1
+    assert other.model_name == "gpt-x"
+    other.select_model("gpt-y")
+    assert "wspólną pamięć" in lobby.message.text()  # same model, same provider, no names
 
 
 def test_lobby_allows_many_smart_bots_and_hidden_duplicates(qtbot, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -195,13 +227,13 @@ def test_lobby_allows_many_smart_bots_and_hidden_duplicates(qtbot, monkeypatch) 
     lobby.build_config()  # hidden seats are not part of the session
 
 
-def test_groq_seat_has_a_limited_english_guidelines_field(qtbot, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_ai_seat_has_a_limited_english_guidelines_field(qtbot, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(seat_row, "availability_problem", lambda seat: None)
     lobby = LobbyView()
     qtbot.addWidget(lobby)
     lobby.show()
     row = lobby.rows[1]
-    assert not row.guidelines.isVisible()  # only Groq seats have it
+    assert not row.guidelines.isVisible()  # only AI seats have it
     row.kind.setCurrentIndex(2)
     assert row.guidelines.isVisible() and row.guidelines_label.isVisible()
     assert "po angielsku" in row.guidelines_label.text() and "100" in row.guidelines_label.text()
@@ -211,8 +243,8 @@ def test_groq_seat_has_a_limited_english_guidelines_field(qtbot, monkeypatch) ->
     assert len(row.guidelines.text()) == 100
     assert row.guidelines_count.text() == "100/100"
     row.guidelines.setText("Avoid hearts.")
-    assert lobby.build_config().seats[1].groq_guidelines == "Avoid hearts."
-    row.kind.setCurrentIndex(1)  # not Groq any more: the field disappears
+    assert lobby.build_config().seats[1].ai_guidelines == "Avoid hearts."
+    row.kind.setCurrentIndex(1)  # not AI any more: the field disappears
     assert not row.guidelines.isVisible()
 
 

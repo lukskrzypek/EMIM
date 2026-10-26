@@ -34,7 +34,7 @@ from gui.core.events import (
     TrickCompleted,
     TurnStarted,
 )
-from gui.core.groq_failures import classify_failure
+from gui.core.ai_failures import classify_failure
 from gui.core.human_controller import HumanGuiController, MoveCancelled
 from gui.core.pace import PaceControl
 from gui.core.seat_config import SeatConfig, SeatKind, SessionConfig
@@ -318,7 +318,7 @@ class GameRunner:
     def _api_gave_up(self, pid: str, controller: PlayerController) -> bool:
         """``True`` when the bot's request failed for good (no tokens, no access): game over.
 
-        ``GroqICLBot`` swallows API errors and plays the first legal card; its
+        ``AIBot`` swallows API errors and plays the first legal card; its
         ``last_reasoning`` is the only trace. Short rate limits just raise a notice.
         """
         failure = classify_failure(getattr(controller, "last_reasoning", ""))
@@ -326,7 +326,7 @@ class GameRunner:
             return False
         label = self._seat_label(pid, self.config.seats[self.config.player_ids.index(pid)])
         if not failure.fatal:
-            self._emit(Notice(f"{pid} ({label}): limit zapytań Groq, zagrano ruch zastępczy."))
+            self._emit(Notice(f"{pid} ({label}): limit zapytań API, zagrano ruch zastępczy."))
             return False
         self._emit(BotUnavailable(pid, label, failure.kind, failure.message))
         self.pace.abort()

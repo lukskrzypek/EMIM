@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from controllers.ai_bot import PROVIDERS
 from gui.config import PLAYER_COUNTS, SMART_SAMPLES
 from gui.core.seat_config import SeatConfig, SeatKind, clean_guidelines, clean_name
 
@@ -32,10 +33,11 @@ class LobbyState:
                 "seats": [
                     {
                         "kind": seat.kind.value,
-                        "groq_model": seat.groq_model,
+                        "ai_provider": seat.ai_provider,
+                        "ai_model": seat.ai_model,
                         "smart_samples": seat.smart_samples,
-                        "groq_guidelines": seat.groq_guidelines,
-                        "groq_name": seat.groq_name,
+                        "ai_guidelines": seat.ai_guidelines,
+                        "ai_name": seat.ai_name,
                     }
                     for seat in self.seats
                 ],
@@ -75,18 +77,26 @@ class LobbyState:
 def _parse_seat(raw: object, fallback: SeatConfig) -> SeatConfig:
     if not isinstance(raw, dict):
         return fallback
+    # Settings saved before the bot supported two APIs: kind "groq", keys "groq_*".
+    legacy = raw.get("kind") == "groq"
     try:
-        kind = SeatKind(raw.get("kind"))
+        kind = SeatKind.AI if legacy else SeatKind(raw.get("kind"))
     except ValueError:
         return fallback
-    model = raw.get("groq_model")
+
+    def field(key: str) -> object:
+        return raw.get(key, raw.get(key.replace("ai_", "groq_", 1)))
+
+    provider = raw.get("ai_provider", "groq" if legacy or "groq_model" in raw else fallback.ai_provider)
+    model = field("ai_model")
     samples = raw.get("smart_samples")
-    guidelines = raw.get("groq_guidelines")
-    name = raw.get("groq_name")
+    guidelines = field("ai_guidelines")
+    name = field("ai_name")
     return SeatConfig(
         kind=kind,
-        groq_model=model.strip() if isinstance(model, str) and model.strip() else fallback.groq_model,
+        ai_model=model.strip() if isinstance(model, str) and model.strip() else fallback.ai_model,
         smart_samples=samples if isinstance(samples, int) and 0 <= samples <= 500 else SMART_SAMPLES,
-        groq_guidelines=clean_guidelines(guidelines) if isinstance(guidelines, str) else "",
-        groq_name=clean_name(name) if isinstance(name, str) else "",
+        ai_guidelines=clean_guidelines(guidelines) if isinstance(guidelines, str) else "",
+        ai_name=clean_name(name) if isinstance(name, str) else "",
+        ai_provider=provider if isinstance(provider, str) and provider in PROVIDERS else fallback.ai_provider,
     )

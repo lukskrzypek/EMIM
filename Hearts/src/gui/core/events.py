@@ -97,7 +97,7 @@ class Notice:
 
 @dataclass(frozen=True)
 class BotUnavailable:
-    """A Groq seat cannot play on (``reason``: ``"tokens"`` or ``"access"``); the game ends."""
+    """An AI seat cannot play on (``reason``: ``"tokens"`` or ``"access"``); the game ends."""
 
     player_id: str
     seat_label: str

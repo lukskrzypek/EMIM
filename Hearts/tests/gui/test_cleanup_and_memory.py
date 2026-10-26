@@ -26,8 +26,8 @@ def _lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
-def _groq_logs(tmp_path: Path) -> tuple[Path, Path]:
-    exchanges, illegal = tmp_path / "groq_exchanges.jsonl", tmp_path / "groq_illegal_moves.jsonl"
+def _ai_logs(tmp_path: Path) -> tuple[Path, Path]:
+    exchanges, illegal = tmp_path / "ai_exchanges.jsonl", tmp_path / "ai_illegal_moves.jsonl"
     rows = [
         {"model": "m/x", "name": "", "n": 1},
         {"model": "m/x", "name": "bold", "n": 2},
@@ -68,9 +68,9 @@ def test_deleting_a_bot_removes_its_deals_whole_so_the_report_stays_valid(tmp_pa
     assert preview_bot_records("nobody", log) == (0, 0)
 
 
-def test_delete_bot_records_in_the_groq_logs_tells_named_and_unnamed_apart(tmp_path: Path) -> None:
+def test_delete_bot_records_in_the_ai_logs_tells_named_and_unnamed_apart(tmp_path: Path) -> None:
     trajectories = tmp_path / "trajectories.jsonl"
-    exchanges, illegal = _groq_logs(tmp_path)
+    exchanges, illegal = _ai_logs(tmp_path)
 
     gone = delete_bot_records("m/x_bold", trajectories, exchanges, illegal)  # no such log: fine
     assert (gone.trajectories, gone.exchanges, gone.illegal) == (0, 1, 1)
@@ -106,7 +106,7 @@ def _report(qtbot, log: Path) -> ReportView:  # type: ignore[no-untyped-def]
 
 def test_report_deletes_the_selected_bot_after_confirmation(qtbot, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     log, second_session = _mixed_log(tmp_path)
-    exchanges, illegal = _groq_logs(tmp_path)
+    exchanges, illegal = _ai_logs(tmp_path)
     view = _report(qtbot, log)
     names = [view.table.item(r, 0).text() for r in range(view.table.rowCount())]
     assert set(names) == {"last_legal", "other_bot", "smart_bot"}
@@ -136,9 +136,9 @@ def test_report_deletes_the_selected_bot_after_confirmation(qtbot, tmp_path: Pat
     assert len(_lines(exchanges)) == 4  # nobody of those logs was named last_legal
 
 
-def test_report_deletion_clears_the_groq_logs_of_that_bot(qtbot, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_report_deletion_clears_the_ai_logs_of_that_bot(qtbot, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     log, _ = _mixed_log(tmp_path)
-    exchanges, illegal = _groq_logs(tmp_path)
+    exchanges, illegal = _ai_logs(tmp_path)
     view = _report(qtbot, log)
     view.selected_label = lambda: "m/x_bold"  # type: ignore[method-assign]
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
@@ -162,7 +162,7 @@ def _memories(folder: Path) -> None:
     (folder / "memory_m_x_bold.txt").write_text("", encoding="utf-8")
     (folder / "memory_.txt").write_text("not a bot", encoding="utf-8")
     (folder / "notes.txt").write_text("keep me", encoding="utf-8")
-    (folder / "groq_exchanges.jsonl").write_text("{}\n", encoding="utf-8")
+    (folder / "ai_exchanges.jsonl").write_text("{}\n", encoding="utf-8")
 
 
 def test_memory_files_are_listed_and_deleted_only_inside_the_memory_dir(tmp_path: Path) -> None:
@@ -252,7 +252,7 @@ def test_mc_caption_is_shown_for_smart_seats_only(qtbot) -> None:  # type: ignor
 
 
 def test_deleting_a_bot_also_clears_its_api_error_log(tmp_path: Path) -> None:
-    api = tmp_path / "groq_api_errors.jsonl"
+    api = tmp_path / "ai_api_errors.jsonl"
     rows = [{"model": "m/x", "name": "", "n": 1}, {"model": "m/x", "name": "bold", "n": 2}, {"model": "m/y", "n": 3}]
     api.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
@@ -263,7 +263,7 @@ def test_deleting_a_bot_also_clears_its_api_error_log(tmp_path: Path) -> None:
 
 def test_report_deletion_reaches_the_api_error_log(qtbot, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     log, _ = _mixed_log(tmp_path)
-    api = tmp_path / "groq_api_errors.jsonl"
+    api = tmp_path / "ai_api_errors.jsonl"
     api.write_text(json.dumps({"model": "m/x", "name": "bold"}) + "\n" + json.dumps({"model": "m/x"}) + "\n", encoding="utf-8")
     view = _report(qtbot, log)
     view.selected_label = lambda: "m/x_bold"  # type: ignore[method-assign]

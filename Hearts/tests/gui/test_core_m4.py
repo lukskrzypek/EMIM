@@ -83,11 +83,31 @@ def test_default_ignored_players_match_main() -> None:
 
 def test_lobby_state_round_trip() -> None:
     seats = list(default_seats())
-    seats[1] = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-20b",
-                          groq_guidelines="Prefer ducking early.", groq_name="bold")
+    seats[1] = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b",
+                          ai_guidelines="Prefer ducking early.", ai_name="bold")
     seats[2] = SeatConfig(SeatKind.SMART, smart_samples=0)
+    seats[3] = SeatConfig(SeatKind.AI, ai_provider="openai", ai_model="gpt-4o")
     state = LobbyState(players=3, deals=25, seats=tuple(seats))
     assert LobbyState.from_json(state.to_json()) == state
+
+
+def test_lobby_state_reads_settings_saved_before_the_openai_support() -> None:
+    old = {
+        "players": 3,
+        "seats": [
+            {"kind": "groq", "groq_model": "openai/gpt-oss-20b", "groq_guidelines": "Duck.", "groq_name": "old"},
+        ],
+    }
+    seat = LobbyState.from_json(json.dumps(old)).seats[0]
+    assert seat.kind is SeatKind.AI and seat.ai_provider == "groq"
+    assert (seat.ai_model, seat.ai_guidelines, seat.ai_name) == ("openai/gpt-oss-20b", "Duck.", "old")
+
+
+def test_lobby_state_ignores_an_unknown_provider() -> None:
+    raw = {"seats": [{"kind": "ai", "ai_provider": "mystery", "ai_model": "m/x"}, {"kind": "ai", "ai_provider": []}]}
+    first, second = LobbyState.from_json(json.dumps(raw)).seats[:2]
+    assert first.ai_provider == "groq" and first.ai_model == "m/x"
+    assert second.ai_provider == "groq"
 
 
 @pytest.mark.parametrize("text", [None, "", "{{{", "[]", "null", "42", '"x"'])
@@ -104,8 +124,8 @@ def test_lobby_state_repairs_bad_fields() -> None:
         "seats": [
             {"kind": "robot"},
             {
-                "kind": "groq", "groq_model": "  ", "groq_examples": 999, "smart_samples": "x",  # old key: ignored
-                "groq_guidelines": "line one\n" + "x" * 300, "groq_name": "a b/c" + "z" * 20,
+                "kind": "groq", "ai_model": "  ", "groq_examples": 999, "smart_samples": "x",  # old key: ignored
+                "ai_guidelines": "line one\n" + "x" * 300, "ai_name": "a b/c" + "z" * 20,
             },
             "oops",
             {"kind": "smart", "smart_samples": 12},
@@ -114,12 +134,12 @@ def test_lobby_state_repairs_bad_fields() -> None:
     state = LobbyState.from_json(json.dumps(raw))
     assert state.players == 4  # not one of 2-5
     assert state.deals == 1000  # clamped
-    assert state.seats[1].groq_name == "a_b_c" + "z" * 5  # file-safe and 10 characters at most
-    guidelines = state.seats[1].groq_guidelines
+    assert state.seats[1].ai_name == "a_b_c" + "z" * 5  # file-safe and 10 characters at most
+    guidelines = state.seats[1].ai_guidelines
     assert len(guidelines) == 100 and "\n" not in guidelines and guidelines.startswith("line one x")
     assert state.seats[0].kind is SeatKind.HUMAN  # unknown kind -> default seat
-    assert state.seats[1].kind is SeatKind.GROQ and not hasattr(state.seats[1], "groq_examples")
-    assert state.seats[1].groq_model  # blank model -> a usable one
+    assert state.seats[1].kind is SeatKind.AI and not hasattr(state.seats[1], "groq_examples")
+    assert state.seats[1].ai_model  # blank model -> a usable one
     assert state.seats[2] == default_seats()[2]
     assert state.seats[3].smart_samples == 12
     assert len(state.seats) == 5

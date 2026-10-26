@@ -61,8 +61,8 @@ def _bot_session(n: int = 3):  # type: ignore[no-untyped-def]
 def test_settings_round_trip_through_a_file(tmp_path: Path) -> None:
     first = _settings(tmp_path)
     seats = list(default_seats())
-    seats[1] = SeatConfig(SeatKind.GROQ, groq_model="openai/gpt-oss-20b",
-                          groq_guidelines="Avoid hearts.")
+    seats[1] = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b",
+                          ai_guidelines="Avoid hearts.")
     state = LobbyState(players=5, deals=7, seats=tuple(seats))
     prefs = ViewPrefs(four_color=True, reveal_bots=True, hints=True, live_eval=False, after_trick=True, delay=0.4)
     first.save_lobby_state(state)

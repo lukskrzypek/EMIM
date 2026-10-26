@@ -3,7 +3,7 @@
 # (lista odświeża się przy powrocie do menu albo po ponownym uruchomieniu).
 # Linie zaczynające się od # i puste linie są pomijane.
 # Modele, które widzi Twój klucz, sprawdzisz tak:
-#   .\.venv-gui\Scripts\python.exe check_models.py
+#   .\.venv-gui\Scripts\python.exe check_models.py groq
 # Nadają się tylko modele czatowe. "llama-prompt-guard" to klasyfikatory (nie odpowiadają
 # kartą), "whisper" i "orpheus" to dźwięk.
 openai/gpt-oss-120b

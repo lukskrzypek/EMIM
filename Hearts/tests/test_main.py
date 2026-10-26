@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from controllers.base import PlayerController
-from controllers.groq_icl_bot import GroqICLBot
+from controllers.ai_bot import AIBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
 from engine.game import TOTAL_POINTS, HeartsGameEngine, PlayerObservation
@@ -45,7 +45,7 @@ def test_setup_assigns_a_controller_to_every_seat(monkeypatch: pytest.MonkeyPatc
     assert list(controllers) == ["P0", "P1", "P2"]
     assert isinstance(controllers["P0"], HumanCLIController)
     assert isinstance(controllers["P1"], SmartHeartsBot)
-    assert isinstance(controllers["P2"], GroqICLBot)
+    assert isinstance(controllers["P2"], AIBot)
     assert controllers["P2"].player_id == "P2"
 
 
@@ -55,7 +55,7 @@ def test_setup_asks_deal_count_only_when_nobody_plays(monkeypatch: pytest.Monkey
     assert num_players == 2
     assert deals == 4 and show_play is False
     assert isinstance(controllers["P0"], SmartHeartsBot)
-    assert isinstance(controllers["P1"], GroqICLBot)
+    assert isinstance(controllers["P1"], AIBot)
 
 
 def test_setup_shows_a_single_bot_deal(monkeypatch: pytest.MonkeyPatch) -> None:

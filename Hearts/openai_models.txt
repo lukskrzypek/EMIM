@@ -1,0 +1,13 @@
+# Modele OpenAI dostępne w lobby - jeden model w linii.
+# Żeby dodać model, dopisz jego identyfikator w nowej linii i wróć do lobby
+# (lista odświeża się przy powrocie do menu albo po ponownym uruchomieniu).
+# Linie zaczynające się od # i puste linie są pomijane.
+# Modele, które widzi Twój klucz, sprawdzisz tak:
+#   .\.venv-gui\Scripts\python.exe check_models.py openai
+# Nadają się tylko modele czatowe (nie embeddingi, whisper, tts, dall-e).
+gpt-4o-mini
+gpt-4o
+# Modele rozumujące (o-series, gpt-5) też działają; bot sam wyśle dla nich
+# reasoning_effort="low" i max_completion_tokens. Odkomentuj, jeśli masz dostęp:
+# gpt-5-mini
+# o4-mini

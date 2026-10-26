@@ -31,7 +31,7 @@ from gui.core.events import (
     TurnStarted,
 )
 from gui.core.game_runner import ErrorResolution
-from gui.core.groq_failures import HEADLINES, REASONS
+from gui.core.ai_failures import HEADLINES, REASONS
 from gui.core.live_evaluator import LiveEvaluator, hint_for_table
 from gui.core.seat_config import SeatKind
 from gui.core.table_model import TableModel
@@ -109,10 +109,10 @@ class GameView(QWidget):
             pid: seat.display_name for pid, seat in zip(config.player_ids, config.seats, strict=True)
         }
         evaluator = session.analyzer if isinstance(session.analyzer, LiveEvaluator) else None
-        memory_models = {  # the Groq seats: only their bots keep a memory pad (key = file name part)
+        memory_models = {  # the AI seats: only their bots keep a memory pad (key = file name part)
             pid: seat.memory_key
             for pid, seat in zip(config.player_ids, config.seats, strict=True)
-            if seat.kind is SeatKind.GROQ
+            if seat.kind is SeatKind.AI
         }
         self.quality_panel = QualityPanel(
             labels, has_human=config.has_human, evaluator=evaluator, memory_models=memory_models
