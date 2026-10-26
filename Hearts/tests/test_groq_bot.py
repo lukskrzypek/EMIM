@@ -479,10 +479,14 @@ def test_user_guidelines_are_appended_only_when_set(monkeypatch: pytest.MonkeyPa
     base = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
     monkeypatch.setattr("controllers.groq_icl_bot.USER_GUIDELINES", "Dump QS at the first void.")
     with_file = GroqICLBot("P1", client=FakeClient()).build_messages(make_obs(["3C"]))[0]["content"]
-    assert with_file == base + "\nDump QS at the first void."
+    note = (
+        "\n\nWhen choosing a card, the text below matters most. "
+        "Prioritize it over every other guideline.\n"
+    )
+    assert with_file == base + note + "Dump QS at the first void."
     overridden = GroqICLBot("P1", client=FakeClient(), guidelines="Lead clubs.")
     text = overridden.build_messages(make_obs(["3C"]))[0]["content"]
-    assert text == base + "\nLead clubs."
+    assert text == base + note + "Lead clubs."
     cleared = GroqICLBot("P1", client=FakeClient(), guidelines="  ")
     assert cleared.build_messages(make_obs(["3C"]))[0]["content"] == base
 

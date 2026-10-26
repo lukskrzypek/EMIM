@@ -43,6 +43,7 @@ _MAX_POOL = 500  # newest informative trajectory records kept as example candida
 # off inside ``memory``, after a legal ``card`` had already been written.
 DEFAULT_MAX_TOKENS = 4096
 # Optional extra instructions appended to the system prompt. Leave "" to add nothing.
+# When set, the prompt says to follow them ahead of every other playing guideline.
 USER_GUIDELINES = ""
 
 SYSTEM_PROMPT = """\
@@ -382,7 +383,11 @@ class GroqICLBot(PlayerController):
         system = SYSTEM_PROMPT + f"\n\nYou are player {self.player_id}."
         extra = self._guidelines.strip()
         if extra:
-            system += "\n" + extra
+            system += (
+                "\n\nWhen choosing a card, the text below matters most. "
+                "Prioritize it over every other guideline.\n"
+                + extra
+            )
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": "\n\n".join(parts)},
