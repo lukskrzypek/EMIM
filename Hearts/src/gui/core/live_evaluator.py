@@ -15,7 +15,8 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from evaluation import GameState, InvalidState, RoundType, evaluate_all
+from engine.contracts import GameContract
+from evaluation import GameState, InvalidState, evaluate_all
 from evaluation.params import Params
 from evaluation.report import FORCED_SCENARIO
 from gui.core.game_runner import AnalysisInput
@@ -88,6 +89,7 @@ def evaluate_position(
     history: Sequence[Sequence[str]],
     current_trick: Sequence[str],
     num_players: int,
+    contract: GameContract,
     legal_moves: Sequence[str],
     chosen: str | None = None,
     model_name: str = "",
@@ -96,7 +98,7 @@ def evaluate_position(
     """Rate every legal card; ``None`` when the position is rejected by the evaluator."""
     state = GameState(
         hand=list(hand),
-        round_type=RoundType.HEARTS,
+        contract=contract,
         history=[list(t) for t in history],
         current_trick=list(current_trick),
         num_players=num_players,
@@ -141,6 +143,7 @@ def hint_for_table(
         history=model.tricks,
         current_trick=[card for _, card in snap.current_trick],
         num_players=snap.num_players,
+        contract=snap.contract,
         legal_moves=snap.legal_moves,
         params=params,
     )
@@ -164,6 +167,7 @@ class LiveEvaluator:
             history=data.history,
             current_trick=[card for _, card in observation.current_trick],
             num_players=observation.num_players,
+            contract=observation.contract,
             legal_moves=observation.legal_moves,
             chosen=data.chosen,
             model_name=data.model_name,

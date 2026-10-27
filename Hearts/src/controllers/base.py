@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from engine.game import PlayerObservation
+from engine.observation import PlayerObservation
 
 
 class PlayerController(ABC):

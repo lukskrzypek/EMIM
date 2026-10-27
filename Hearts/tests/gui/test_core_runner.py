@@ -1,4 +1,4 @@
-"""GameRunner: parity with ``main.play_deal``, pacing, human seats, errors, analyzer hook."""
+"""GameRunner: parity with ``main.play_match``, pacing, human seats, errors, analyzer hook."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ import main
 from collector import Collector
 from controllers.base import PlayerController
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.contracts import GameContract, contract_total_penalty
+from engine.observation import PlayerObservation
+from engine.state import GameState
 from gui.core.events import (
     ControllerError,
     DealFinished,
@@ -32,17 +34,22 @@ from gui.core.seat_config import SeatConfig, SeatKind, SessionConfig
 from utils.icl_logger import ICLLogger
 
 
-def _config(n: int = 3, deals: int = 1, kind: SeatKind = SeatKind.SMART, **kw) -> SessionConfig:  # type: ignore[no-untyped-def]
+def _config(n: int = 3, kind: SeatKind = SeatKind.SMART, **kw) -> SessionConfig:  # type: ignore[no-untyped-def]
     seats = tuple(SeatConfig(kind, smart_samples=0) for _ in range(n))
-    return SessionConfig(seats, deals=deals, log_path=None, **kw)
+    return SessionConfig(seats, log_path=None, **kw)
 
 
 def _bots(n: int, samples: int = 3) -> dict[str, PlayerController]:
     return {f"P{i}": SmartHeartsBot(num_samples=samples, seed=i) for i in range(n)}
 
 
-def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n, k: HeartsGameEngine(n, seed=seed + k)
+def _state(n: int, seed: int, deals: int = 1) -> GameState:
+    """A match that starts ``deals`` deals before the end (a full match is 21/28 deals)."""
+    return GameState.new(n, seed=seed, start_deal=n * 7 - deals + 1)
+
+
+def _factory(seed: int, deals: int = 1):  # type: ignore[no-untyped-def]
+    return lambda n: _state(n, seed, deals)
 
 
 class FirstLegal(PlayerController):
@@ -56,11 +63,11 @@ class FirstLegal(PlayerController):
 # ------------------------------------------------------------------- parity
 
 
-@pytest.mark.parametrize("players", [2, 3, 4, 5])
-def test_runner_reproduces_main_play_deal(tmp_path: Path, players: int) -> None:
+@pytest.mark.parametrize("players", [3, 4])
+def test_runner_reproduces_main_play_match(tmp_path: Path, players: int) -> None:
     expected_log = tmp_path / "main.jsonl"
-    expected = main.play_deal(
-        HeartsGameEngine(players, seed=7),
+    expected = main.play_match(
+        _state(players, 7, deals=2),
         _bots(players),
         ICLLogger(expected_log),
         show_play=False,
@@ -72,13 +79,13 @@ def test_runner_reproduces_main_play_deal(tmp_path: Path, players: int) -> None:
         tuple(SeatConfig(SeatKind.SMART) for _ in range(players)), log_path=actual_log
     )
     runner = GameRunner(
-        config, sink, pace=PaceControl(0), controllers=_bots(players), engine_factory=_factory(7)
+        config, sink, pace=PaceControl(0), controllers=_bots(players), engine_factory=_factory(7, deals=2)
     )
     runner.start()
     done = sink.wait_finished()
 
     assert not done.aborted
-    assert sink.of(DealFinished)[0].scores == expected
+    assert sink.of(DealFinished)[-1].totals == expected
     assert actual_log.read_text(encoding="utf-8") == expected_log.read_text(encoding="utf-8")
 
 
@@ -96,24 +103,26 @@ def test_event_stream_is_complete_and_ordered() -> None:
     assert len(sink.of(MovePlayed)) == 52 and len(sink.of(TurnStarted)) == 52
     assert len(sink.of(TrickCompleted)) == 13
     assert [m.move_number for m in sink.of(MovePlayed)] == list(range(1, 53))
-    assert sum(sink.of(DealFinished)[0].scores.values()) == 26
+    finished = sink.of(DealFinished)[0]
+    assert finished.contract is GameContract.ROBBER
+    assert sum(finished.scores.values()) == contract_total_penalty(GameContract.ROBBER, 4)
     last_trick = sink.of(TrickCompleted)[-1]
-    assert len(last_trick.cards) == 4 and last_trick.snapshot.game_over
+    assert len(last_trick.cards) == 4 and last_trick.snapshot.deal_over
 
 
 def test_multiple_deals_accumulate_totals() -> None:
     sink = Collector()
     runner = GameRunner(
-        _config(3, deals=3), sink, pace=PaceControl(0), controllers=_bots(3, 0),
-        engine_factory=_factory(5),
+        _config(3), sink, pace=PaceControl(0), controllers=_bots(3, 0),
+        engine_factory=_factory(5, deals=3),
     )
     runner.start()
     done = sink.wait_finished()
 
     assert done.deals_played == 3 and not done.aborted
-    assert sum(done.totals.values()) == 3 * 26
-    assert [d.deal_number for d in sink.of(DealFinished)] == [1, 2, 3]
-    assert [d.deal_number for d in sink.of(DealStarted)] == [1, 2, 3]
+    assert sum(done.totals.values()) == 3 * contract_total_penalty(GameContract.ROBBER, 3)
+    assert [d.deal_number for d in sink.of(DealFinished)] == [19, 20, 21]
+    assert [d.deal_number for d in sink.of(DealStarted)] == [19, 20, 21]
     assert sink.of(DealFinished)[-1].totals == done.totals
 
 
@@ -132,7 +141,7 @@ class Slow(FirstLegal):
 def test_start_returns_immediately_with_a_slow_bot() -> None:
     sink = Collector()
     runner = GameRunner(
-        _config(2), sink, pace=PaceControl(0), controllers={"P0": Slow(0.4), "P1": Slow(0.4)}
+        _config(3), sink, pace=PaceControl(0), controllers={f"P{i}": Slow(0.4) for i in range(3)}
     )
     started = time.monotonic()
     runner.start()
@@ -180,7 +189,7 @@ def test_pause_after_trick_stops_after_a_completed_trick() -> None:
 def test_abort_while_paused_finishes_quickly() -> None:
     sink = Collector()
     runner = GameRunner(
-        _config(3, deals=5), sink, pace=PaceControl(0, paused=True), controllers=_bots(3, 0)
+        _config(3), sink, pace=PaceControl(0, paused=True), controllers=_bots(3, 0)
     )
     runner.start()
     assert sink.wait_for(lambda: sink.of(TurnStarted))
@@ -193,7 +202,7 @@ def test_abort_while_paused_finishes_quickly() -> None:
 def test_delay_spaces_bot_moves() -> None:
     sink = Collector()
     runner = GameRunner(
-        _config(2), sink, pace=PaceControl(0.05), controllers={"P0": FirstLegal(), "P1": FirstLegal()}
+        _config(3), sink, pace=PaceControl(0.05), controllers={f"P{i}": FirstLegal() for i in range(3)}
     )
     started = time.monotonic()
     runner.start()
@@ -209,9 +218,14 @@ def test_delay_spaces_bot_moves() -> None:
 def test_human_seat_waits_for_a_legal_click() -> None:
     sink = Collector()
     config = SessionConfig(
-        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART)), log_path=None
+        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART), SeatConfig(SeatKind.SMART)),
+        log_path=None,
     )
-    controllers = {"P0": HumanGuiController(), "P1": SmartHeartsBot(num_samples=0, seed=1)}
+    controllers = {
+        "P0": HumanGuiController(),
+        "P1": SmartHeartsBot(num_samples=0, seed=1),
+        "P2": SmartHeartsBot(num_samples=0, seed=2),
+    }
     runner = GameRunner(
         config, sink, pace=PaceControl(0), controllers=controllers, engine_factory=_factory(3)
     )
@@ -219,17 +233,20 @@ def test_human_seat_waits_for_a_legal_click() -> None:
     assert human is not None
     runner.start()
 
-    assert sink.wait_for(lambda: sink.of(TurnStarted))
-    turn = sink.of(TurnStarted)[0]
-    assert turn.is_human and turn.snapshot.legal_moves
+    def human_turns() -> list[TurnStarted]:
+        return [t for t in sink.of(TurnStarted) if t.is_human]
+
+    assert sink.wait_for(human_turns)  # bots may open the deal first
+    turn = human_turns()[0]
+    assert turn.snapshot.legal_moves
     assert sink.wait_for(lambda: human.awaiting_move)
     assert not human.submit("ZZ")
-    assert not sink.of(MovePlayed)
+    assert not [m for m in sink.of(MovePlayed) if m.player_id == "P0"]
 
     legal = turn.snapshot.legal_moves[0]
     assert human.submit(legal)
-    assert sink.wait_for(lambda: sink.of(MovePlayed))
-    move = sink.of(MovePlayed)[0]
+    assert sink.wait_for(lambda: [m for m in sink.of(MovePlayed) if m.player_id == "P0"])
+    move = [m for m in sink.of(MovePlayed) if m.player_id == "P0"][0]
     assert move.player_id == "P0" and move.card == legal and move.model_name == "human"
     runner.abort()
     sink.wait_finished()
@@ -237,8 +254,8 @@ def test_human_seat_waits_for_a_legal_click() -> None:
 
 def test_abort_releases_a_waiting_human() -> None:
     sink = Collector()
-    config = SessionConfig((SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.HUMAN)), log_path=None)
-    controllers = {"P0": HumanGuiController(), "P1": HumanGuiController()}
+    config = SessionConfig((SeatConfig(SeatKind.HUMAN),) * 3, log_path=None)
+    controllers = {f"P{i}": HumanGuiController() for i in range(3)}
     runner = GameRunner(
         config, sink, pace=PaceControl(0), controllers=controllers, engine_factory=_factory(3)
     )
@@ -251,11 +268,17 @@ def test_abort_releases_a_waiting_human() -> None:
 def test_multi_deal_session_with_a_human_pauses_between_deals() -> None:
     sink = Collector()
     config = SessionConfig(
-        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART)), deals=2, log_path=None
+        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART), SeatConfig(SeatKind.SMART)),
+        log_path=None,
     )
-    controllers = {"P0": HumanGuiController(), "P1": SmartHeartsBot(num_samples=0, seed=1)}
+    controllers = {
+        "P0": HumanGuiController(),
+        "P1": SmartHeartsBot(num_samples=0, seed=1),
+        "P2": SmartHeartsBot(num_samples=0, seed=2),
+    }
     runner = GameRunner(
-        config, sink, pace=PaceControl(0), controllers=controllers, engine_factory=_factory(3)
+        config, sink, pace=PaceControl(0), controllers=controllers,
+        engine_factory=_factory(3, deals=2),
     )
     human = runner.human_controller("P0")
     assert human is not None
@@ -295,8 +318,9 @@ class Boom(PlayerController):
 
 def _boom_runner(sink: Collector, failures: int) -> GameRunner:
     runner = GameRunner(
-        _config(2), sink, pace=PaceControl(0),
-        controllers={"P0": Boom(failures), "P1": FirstLegal()}, engine_factory=_factory(4),
+        _config(3), sink, pace=PaceControl(0),
+        controllers={"P0": Boom(failures), "P1": FirstLegal(), "P2": FirstLegal()},
+        engine_factory=_factory(4),
     )
     return runner
 
@@ -339,7 +363,8 @@ def test_illegal_choice_is_reported_as_an_error() -> None:
 
     sink = Collector()
     runner = GameRunner(
-        _config(2), sink, pace=PaceControl(0), controllers={"P0": Cheater(), "P1": FirstLegal()},
+        _config(3), sink, pace=PaceControl(0),
+        controllers={"P0": Cheater(), "P1": FirstLegal(), "P2": FirstLegal()},
         engine_factory=_factory(4),
     )
     runner.start()
@@ -381,7 +406,7 @@ def test_analyzer_failure_does_not_stop_the_game() -> None:
 
     sink = Collector()
     runner = GameRunner(
-        _config(2), sink, pace=PaceControl(0), controllers=_bots(2, 0), analyzer=broken,
+        _config(3), sink, pace=PaceControl(0), controllers=_bots(3, 0), analyzer=broken,
         engine_factory=_factory(6),
     )
     runner.start()
@@ -394,9 +419,9 @@ def test_unwritable_log_disables_logging_with_a_notice(tmp_path: Path) -> None:
     blocker = tmp_path / "file"
     blocker.write_text("x")
     sink = Collector()
-    config = SessionConfig((SeatConfig(SeatKind.SMART),) * 2, log_path=blocker / "log.jsonl")
+    config = SessionConfig((SeatConfig(SeatKind.SMART),) * 3, log_path=blocker / "log.jsonl")
     runner = GameRunner(
-        config, sink, pace=PaceControl(0), controllers=_bots(2, 0), engine_factory=_factory(6)
+        config, sink, pace=PaceControl(0), controllers=_bots(3, 0), engine_factory=_factory(6)
     )
     runner.start()
     done = sink.wait_finished()

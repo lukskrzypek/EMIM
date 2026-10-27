@@ -1,4 +1,4 @@
-"""Lobby output: who sits where and how many deals are played."""
+"""Lobby output: who sits where (one session = one match of 7 deals per player)."""
 
 from __future__ import annotations
 
@@ -83,15 +83,12 @@ class SessionConfig:
     """Everything the runner needs; seats are ``P0``, ``P1``, ... in order."""
 
     seats: tuple[SeatConfig, ...]
-    deals: int = 1
-    seed: int | None = None  # deal ``k`` (0-based) is dealt with ``seed + k``
+    seed: int | None = None  # seed of the match (first declarer and every deal); ``None`` = random
     log_path: Path | None = LOG_PATH  # trajectories.jsonl; ``None`` switches logging off
 
     def __post_init__(self) -> None:
         if len(self.seats) not in PLAYER_COUNTS:
             raise ValueError(f"Player count must be one of {PLAYER_COUNTS}, got {len(self.seats)}")
-        if self.deals < 1:
-            raise ValueError(f"Deal count must be positive, got {self.deals}")
         if duplicates := duplicate_ai_memories(self.seats):
             # Two seats on one memory file would overwrite each other's notes.
             raise ValueError(

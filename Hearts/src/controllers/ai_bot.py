@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 import re
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from controllers.base import PlayerController
-from engine.game import PlayerObservation
+from engine.observation import PlayerObservation
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +76,6 @@ _FORMAT_ERROR_MARKERS = (
     "json_validate_failed",
     "failed to generate json",
 )
-_MAX_POOL = 500  # newest informative trajectory records kept as example candidates
 # Room for a low-effort chain of thought plus a memory pad. 512 cut the JSON
 # off inside ``memory``, after a legal ``card`` had already been written.
 DEFAULT_MAX_TOKENS = 4096
@@ -87,56 +84,16 @@ DEFAULT_MAX_TOKENS = 4096
 USER_GUIDELINES = ""
 
 SYSTEM_PROMPT = """\
-Expert Hearts player. Cards: rank (2-9,T,J,Q,K,A) + suit (C,D,S,H).
-Goal: minimize penalty points (H=1pt, QS=13pt; all 26pts = Shoot the Moon: 0 for you, 26 others).
-Heuristics: duck when following suit; dump QS and high H/S when void; lead low from long suits; track Voids.
+Expert Kierki (King) player. Cards: rank (2-9,T,J,Q,K,A) + suit (C,D,S,H). Rank and suit are followed in Legal.
+A match is a series of deals; each deal has one contract (see the Rule line). Goal: lowest total penalty points.
+Contracts: NO_TRICKS (each trick 20), NO_HEARTS (each heart 20), NO_QUEENS (each Q 60), NO_MEN (each K/J 30),
+NO_KING_OF_HEARTS (KH 150), NO_7TH_AND_LAST (tricks 7 and last 75 each), ROBBER (all of them combined).
+Heuristics: duck when following suit; dump penalty cards when void; lead low from long suits; track Voids.
 MEMORY PAD: Your scratchpad is saved to disk across sessions. Use it for two distinct layers:
 1. Current Hand: transient state, known Voids, and active trick tracking.
 2. Long-term Playbook: cross-game heuristics, opponent profiles/tendencies, and lessons learned from past mistakes.
 When editing, prune expired hand details but prioritize preserving and refining these long-term strategic takeaways. null only if unchanged and pad is not (empty).
 Reply ONLY with JSON: {"card": "<CODE from Legal>", "reasoning": "<short>", "memory": "<rewritten pad, or null only if nothing changed>"}"""
-
-def _load_examples(
-    path: Path,
-    count: int,
-    selection: Literal["last", "random"],
-    rng: random.Random,
-) -> list[dict[str, Any]]:
-    """Read informative records (more than one legal move) from a JSONL file."""
-    if count <= 0 or not path.is_file():
-        return []
-    pool: deque[dict[str, Any]] = deque(maxlen=_MAX_POOL)
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            legal = record.get("legal_moves")
-            if (
-                isinstance(legal, list)
-                and len(legal) > 1
-                and record.get("chosen_move") in legal
-                and record.get("prompt_context")
-            ):
-                pool.append(record)
-    records = list(pool)
-    if selection == "random":
-        return rng.sample(records, min(count, len(records)))
-    return records[-count:]
-
-
-def _format_example(index: int, record: dict[str, Any]) -> str:
-    lines = [f"### Example {index}", str(record["prompt_context"])]
-    reasoning = str(record.get("reasoning") or "").strip()
-    if reasoning:
-        lines.append(f"Reasoning: {reasoning}")
-    lines.append(f"Answer: {json.dumps({'card': record['chosen_move']})}")
-    return "\n".join(lines)
-
 
 def memory_filename(model: str) -> str:
     """``memory_<bot>.txt``; characters illegal in a file name become ``_``."""
@@ -328,17 +285,14 @@ def _default_reasoning_effort(provider: str, model: str) -> str | None:
 
 
 class AIBot(PlayerController):
-    """Plays one seat by prompting an LLM (Groq or OpenAI) with optional few-shot examples."""
+    """Plays one seat by prompting an LLM (Groq or OpenAI)."""
 
     def __init__(
         self,
         player_id: str,
         model: str | None = None,
-        trajectories_path: str | Path | None = None,
         *,
         provider: str = DEFAULT_PROVIDER,
-        num_examples: int = 0,
-        example_selection: Literal["last", "random"] = "last",
         temperature: float = 0.0,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         api_key: str | None = None,
@@ -349,12 +303,9 @@ class AIBot(PlayerController):
         memory_path: str | Path | None = None,
         max_memory_chars: int = 600,
         client: Any | None = None,
-        seed: int | None = None,
         guidelines: str | None = None,
         name: str = "",
     ) -> None:
-        if example_selection not in ("last", "random"):
-            raise ValueError(f"example_selection must be 'last' or 'random', got {example_selection!r}")
         info = get_provider(provider)
         model = model or info.default_model
         self.player_id = player_id
@@ -364,9 +315,6 @@ class AIBot(PlayerController):
         # in the name of the memory file and in the exchange / illegal-move logs.
         self.name = name.strip()
         self._label = f"{model}_{self.name}" if self.name else model
-        self.trajectories_path = Path(trajectories_path) if trajectories_path else None
-        self._num_examples = num_examples
-        self._selection: Literal["last", "random"] = example_selection
         # ``None`` (set when the API refuses the value) leaves the parameter out of the request.
         self._temperature: float | None = temperature
         self._max_tokens = max_tokens
@@ -397,7 +345,6 @@ class AIBot(PlayerController):
         # How strictly the reply is constrained; relaxed when the API refuses (see ``_create``).
         # Groq takes the strict schema on gpt-oss only; OpenAI chat models take it as a rule.
         self._format_level = 1 if info.id == "groq" and "gpt-oss" not in model else 0
-        self._rng = random.Random(seed)
         # None uses USER_GUIDELINES; "" turns the extra instructions off.
         self._guidelines = USER_GUIDELINES if guidelines is None else guidelines
 
@@ -433,15 +380,7 @@ class AIBot(PlayerController):
 
     def build_messages(self, observation: PlayerObservation) -> list[dict[str, str]]:
         """System + user messages for the current observation."""
-        examples = (
-            _load_examples(self.trajectories_path, self._num_examples, self._selection, self._rng)
-            if self.trajectories_path is not None and self._num_examples > 0
-            else []
-        )
         parts: list[str] = []
-        if examples:
-            parts.append("Past plays showing the expected format and decision style:")
-            parts.extend(_format_example(i, rec) for i, rec in enumerate(examples, start=1))
         mem = self.read_memory()
         parts.append(f"### Your Memory Pad ({len(mem)}/{self._max_memory_chars} chars)\n{mem}")
         parts.append("### Current state (you are " + observation.player_id + ")")

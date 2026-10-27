@@ -10,7 +10,7 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QPushButton
 
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine
+from engine.state import GameState
 from evaluation.params import Params
 from evaluation.report import build_report
 from evaluation.trajectories import load_moves
@@ -40,7 +40,7 @@ def _settings(tmp_path: Path, name: str = "s.ini") -> AppSettings:
 
 
 def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n, k: HeartsGameEngine(n, seed=seed + k)
+    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7)  # just the last deal
 
 
 def _bot_session(n: int = 3):  # type: ignore[no-untyped-def]
@@ -63,7 +63,7 @@ def test_settings_round_trip_through_a_file(tmp_path: Path) -> None:
     seats = list(default_seats())
     seats[1] = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b",
                           ai_guidelines="Avoid hearts.")
-    state = LobbyState(players=5, deals=7, seats=tuple(seats))
+    state = LobbyState(players=3, seats=tuple(seats))
     prefs = ViewPrefs(four_color=True, reveal_bots=True, hints=True, live_eval=False, after_trick=True, delay=0.4)
     first.save_lobby_state(state)
     first.save_view_prefs(prefs)
@@ -97,11 +97,10 @@ def test_lobby_restores_every_choice_including_hidden_seats(qtbot) -> None:  # t
     qtbot.addWidget(lobby)
     seats = list(default_seats())
     seats[0] = SeatConfig(SeatKind.SMART, smart_samples=5)
-    seats[4] = SeatConfig(SeatKind.SMART, smart_samples=9)  # hidden at 3 players
-    state = LobbyState(players=3, deals=12, seats=tuple(seats))
+    seats[3] = SeatConfig(SeatKind.SMART, smart_samples=9)  # hidden at 3 players
+    state = LobbyState(players=3, seats=tuple(seats))
     lobby.apply_state(state)
     assert lobby.num_players == 3
-    assert lobby.deals.value() == 12
     assert lobby.rows[0].seat_kind is SeatKind.SMART and lobby.rows[0].samples.value() == 5
     assert lobby.state() == state
     assert lobby.build_config().num_players == 3
@@ -111,23 +110,22 @@ def test_main_window_remembers_the_lobby_and_the_geometry(qtbot, tmp_path: Path)
     settings = _settings(tmp_path)
     window = MainWindow(settings, log_path=tmp_path / "none.jsonl")
     qtbot.addWidget(window)
-    window.lobby.deals.setValue(9)
-    window.lobby.players.setCurrentIndex(0)  # 2 players
+    window.lobby.players.setCurrentIndex(0)  # 3 players
     window.lobby.rows[1].kind.setCurrentIndex(0)  # a human on seat 1
     window.start_session(window.lobby.build_config())
-    assert settings.lobby_state().deals == 9 and settings.lobby_state().players == 2
+    assert settings.lobby_state().players == 3
     window.close()
     assert settings.geometry() is not None
 
     again = MainWindow(_settings(tmp_path), log_path=tmp_path / "none.jsonl")
     qtbot.addWidget(again)
-    assert again.lobby.deals.value() == 9 and again.lobby.num_players == 2
+    assert again.lobby.num_players == 3
 
 
 def test_rematch_restarts_with_the_same_seats(qtbot, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     window = MainWindow(_settings(tmp_path), log_path=tmp_path / "none.jsonl")
     qtbot.addWidget(window)
-    config = SessionConfig((SeatConfig(SeatKind.SMART, smart_samples=0),) * 3, deals=40, log_path=None)
+    config = SessionConfig((SeatConfig(SeatKind.SMART, smart_samples=0),) * 3, log_path=None)
     window.rematch()  # nothing played yet: nothing to repeat
     assert window.game is None
     window.start_session(config)
@@ -151,7 +149,7 @@ def _report_view(qtbot, log: Path, **kw) -> ReportView:  # type: ignore[no-untyp
 
 def test_report_view_shows_the_offline_report(qtbot, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     log = tmp_path / "trajectories.jsonl"
-    _play(4, seed=31, log=log, deals=2)
+    _play(4, seed=31, log=log, start_deal=27)  # the last two deals
     view = _report_view(qtbot, log)
     with qtbot.waitSignal(view.finished, timeout=10000):
         view.refresh()
@@ -309,11 +307,17 @@ def test_game_view_applies_and_saves_preferences(qtbot, tmp_path: Path) -> None:
 def test_hints_and_live_evaluation_choices_are_restored(qtbot, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     settings = _settings(tmp_path)
     settings.save_view_prefs(ViewPrefs(hints=True, reveal_bots=True, live_eval=False))
-    config = SessionConfig((SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART, smart_samples=0)), log_path=None)
+    config = SessionConfig(
+        (SeatConfig(SeatKind.HUMAN), *(SeatConfig(SeatKind.SMART, smart_samples=0),) * 2), log_path=None
+    )
     evaluator = LiveEvaluator()
     session = SessionController(
         config,
-        controllers={"P0": HumanGuiController(), "P1": SmartHeartsBot(num_samples=0, seed=1)},
+        controllers={
+            "P0": HumanGuiController(),
+            "P1": SmartHeartsBot(num_samples=0, seed=1),
+            "P2": SmartHeartsBot(num_samples=0, seed=2),
+        },
         engine_factory=_factory(3),
         analyzer=evaluator,
     )

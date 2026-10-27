@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -47,7 +46,7 @@ class LobbyView(QWidget):
 
         title = QLabel("Kierki")
         title.setObjectName("title")
-        subtitle = QLabel("Wybierz graczy przy stole i rozpocznij grę.")
+        subtitle = QLabel("Kierki polskie (King): wybierz graczy przy stole i rozpocznij partię (7 rozdań na gracza).")
         subtitle.setObjectName("subtitle")
 
         self.players = QComboBox()
@@ -64,13 +63,8 @@ class LobbyView(QWidget):
             self.rows.append(row)
             seats_box.addWidget(row)
 
-        self.deals = QSpinBox()
-        self.deals.setRange(1, 1000)
-        self.deals.setToolTip("Rozdań w jednej sesji; wyniki są sumowane.")
-
         options = QFormLayout()
         options.addRow("Liczba graczy", self.players)
-        options.addRow("Liczba rozdań", self.deals)
 
         self.message = QLabel()
         self.message.setObjectName("warning")
@@ -118,13 +112,11 @@ class LobbyView(QWidget):
         """Everything the user chose, for ``AppSettings`` (all seats, also hidden ones)."""
         return LobbyState(
             players=self.num_players,
-            deals=self.deals.value(),
             seats=tuple(row.config() for row in self.rows),
         )
 
     def apply_state(self, state: LobbyState) -> None:
         self.players.setCurrentIndex(PLAYER_COUNTS.index(state.players))
-        self.deals.setValue(state.deals)
         for row, seat in zip(self.rows, state.seats, strict=False):
             row.apply(seat)
         self._update_state()
@@ -133,7 +125,6 @@ class LobbyView(QWidget):
         n = self.num_players
         return SessionConfig(
             seats=tuple(row.config() for row in self.rows[:n]),
-            deals=self.deals.value(),
         )
 
     def open_memory_dialog(self) -> None:

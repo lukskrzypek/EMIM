@@ -10,7 +10,8 @@ from PySide6.QtGui import QColor, QFontDatabase, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QPushButton
 
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine
+from engine.contracts import GameContract
+from engine.state import GameState
 from engine.models import standard_deck
 from gui.core.events import DealFinished, MovePlayed, SessionFinished
 from gui.core.human_controller import HumanGuiController
@@ -32,8 +33,14 @@ def _distinct_colors(pixmap: QPixmap) -> int:
     return len({image.pixel(x, y) for x in range(0, image.width(), 2) for y in range(0, image.height(), 2)})
 
 
-def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n, k: HeartsGameEngine(n, seed=seed + k)
+def _factory(seed: int, deals: int = 1):  # type: ignore[no-untyped-def]
+    """A match that starts ``deals`` deals before the end (a full match is 21/28 deals)."""
+    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7 - deals + 1)
+
+
+def _p0_opens(seed: int):  # type: ignore[no-untyped-def]
+    """3 players, deals 19-21: P0 declares (and so opens) deal 19, the others come later."""
+    return lambda n: GameState.new(n, seed=seed, first_declarer=0, start_deal=19)
 
 
 # ------------------------------------------------------------------ renderers
@@ -122,19 +129,22 @@ def test_scene_places_all_cards_and_shows_only_allowed_hands(qapp) -> None:  # t
 
 
 def test_playable_cards_rise_and_the_rest_are_dimmed(qapp) -> None:  # type: ignore[no-untyped-def]
-    pid = HeartsGameEngine(4, seed=3).current_player  # whoever holds 2C leads
-    assert pid is not None
+    declarer = GameState.new(4, seed=3).declarer
+    pid = f"P{(int(declarer[1:]) + 1) % 4}"  # the player after the declarer must follow suit
     table = Table(4, humans=(pid,), seed=3)
+    table.turn()
+    table.play_logged()  # the declarer (a bot) opens
     table.turn()
     scene = _scene(table)
     hand = table.model.snapshot.hands[pid]  # type: ignore[union-attr]
-    playable = [c for c in hand if scene.items_by_card[c].legal is True]
-    assert playable == ["2C"]
-    others = [scene.items_by_card[c] for c in hand if c != "2C"]
+    legal = set(table.model.legal_moves)
+    assert 0 < len(legal) < len(hand)
+    playable = [scene.items_by_card[c] for c in hand if scene.items_by_card[c].legal is True]
+    assert {i.code for i in playable} == legal
+    others = [scene.items_by_card[c] for c in hand if c not in legal]
     assert all(i.legal is False for i in others)
-    lifted_y = scene.items_by_card["2C"].pos().y()
-    assert lifted_y < min(i.pos().y() for i in others)
-    assert scene.items_by_card["2C"].acceptedMouseButtons() == Qt.MouseButton.LeftButton
+    assert max(i.pos().y() for i in playable) < min(i.pos().y() for i in others)
+    assert all(i.acceptedMouseButtons() == Qt.MouseButton.LeftButton for i in playable)
     assert all(i.acceptedMouseButtons() == Qt.MouseButton.NoButton for i in others)
 
 
@@ -204,16 +214,19 @@ def test_card_item_clicks_only_when_playable(qapp) -> None:  # type: ignore[no-u
 
 def test_result_overlays_offer_the_right_actions(qapp, qtbot) -> None:  # type: ignore[no-untyped-def]
     session = SessionController(
-        SessionConfig((SeatConfig(SeatKind.SMART),) * 2, log_path=None),
-        controllers={"P0": SmartHeartsBot(num_samples=0), "P1": SmartHeartsBot(num_samples=0)},
+        SessionConfig((SeatConfig(SeatKind.SMART),) * 3, log_path=None),
+        controllers={f"P{i}": SmartHeartsBot(num_samples=0) for i in range(3)},
     )
     view = GameView(session)
     qtbot.addWidget(view)
     view.resize(1200, 800)
     view.show()
     overlay = view.table.result
-    labels = {"P0": "A", "P1": "B"}
-    deal = DealFinished(1, {"P0": 0, "P1": 26}, "P0", {"P0": 0, "P1": 26}, {"P0": 1, "P1": 0}, 0)
+    labels = {"P0": "A", "P1": "B", "P2": "C"}
+    scores = {"P0": 0, "P1": 20, "P2": 240}
+    deal = DealFinished(
+        1, scores, GameContract.NO_TRICKS, "P0", scores, {"P0": 1, "P1": 0, "P2": 0}, 0
+    )
 
     def buttons() -> list[QPushButton]:
         return overlay.findChildren(QPushButton)
@@ -227,7 +240,7 @@ def test_result_overlays_offer_the_right_actions(qapp, qtbot) -> None:  # type: 
     overlay.show_deal(deal, labels, can_continue=False, waiting=True)  # bots carry on alone
     qtbot.waitUntil(lambda: not buttons(), timeout=1000)  # old buttons are deleted later
 
-    done = SessionFinished({"P0": 0, "P1": 26}, {"P0": 1, "P1": 0}, 0, 1, ("P0",), False)
+    done = SessionFinished(scores, {"P0": 1, "P1": 0, "P2": 0}, 0, 1, ("P0",), False)
     overlay.show_session(done, labels)
     qtbot.waitUntil(lambda: [b.text() for b in buttons()] == ["Zagraj ponownie", "Wróć do lobby"], timeout=1000)
     with qtbot.waitSignal(overlay.rematchRequested, timeout=500):
@@ -273,10 +286,12 @@ def test_hot_seat_flow_through_the_real_ui(qtbot) -> None:  # type: ignore[no-un
     own = [c for c, i in view.table_scene.items_by_card.items() if i.face_up]
     assert own and set(own) <= set(view.model.snapshot.hands[first])  # type: ignore[union-attr]
 
-    playable = next(i for i in view.table_scene.items_by_card.values() if i.legal is True)
-    qtbot.mouseClick(
-        view.table.viewport(), Qt.MouseButton.LeftButton, pos=view.table.mapFromScene(playable.scenePos())
+    # A fanned hand overlaps: click the first legal card that is not covered by its neighbour.
+    playable, point = next(
+        (i, p) for i in view.table_scene.items_by_card.values() if i.legal is True
+        for p in [view.table.mapFromScene(i.scenePos())] if view.table.itemAt(p) is i
     )
+    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=point)
     qtbot.waitUntil(lambda: any(m.card == playable.code for m in moves), timeout=3000)
     session.close()
 
@@ -300,32 +315,40 @@ def test_bot_only_table_shows_every_hand_and_locks_the_toggle(qtbot) -> None:  #
 
 def test_reveal_toggle_flips_bot_cards_with_a_human_at_the_table(qtbot) -> None:  # type: ignore[no-untyped-def]
     config = SessionConfig(
-        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART, smart_samples=0)), log_path=None
+        (SeatConfig(SeatKind.HUMAN), *(SeatConfig(SeatKind.SMART, smart_samples=0),) * 2), log_path=None
     )
-    controllers = {"P0": HumanGuiController(), "P1": SmartHeartsBot(num_samples=0, seed=1)}
-    session = SessionController(config, controllers=controllers, engine_factory=_factory(3))
+    controllers = {
+        "P0": HumanGuiController(),
+        "P1": SmartHeartsBot(num_samples=0, seed=1),
+        "P2": SmartHeartsBot(num_samples=0, seed=2),
+    }
+    session = SessionController(config, controllers=controllers, engine_factory=_p0_opens(3))
     session.pace.delay = 0.0
     view = GameView(session)
     qtbot.addWidget(view)
     session.start()
-    qtbot.waitUntil(lambda: len(view.table_scene.items_by_card) == 52, timeout=3000)
-    assert sum(i.face_up for i in view.table_scene.items_by_card.values()) == 26
+    qtbot.waitUntil(lambda: len(view.table_scene.items_by_card) == 51, timeout=3000)
+    assert sum(i.face_up for i in view.table_scene.items_by_card.values()) == 17
     view.reveal.setChecked(True)
     assert all(i.face_up for i in view.table_scene.items_by_card.values())
     view.reveal.setChecked(False)
-    assert sum(i.face_up for i in view.table_scene.items_by_card.values()) == 26
+    assert sum(i.face_up for i in view.table_scene.items_by_card.values()) == 17
     session.close()
 
 
 def test_multi_deal_session_with_a_human_waits_on_the_result_overlay(qtbot) -> None:  # type: ignore[no-untyped-def]
     config = SessionConfig(
-        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART, smart_samples=0)), deals=2, log_path=None
+        (SeatConfig(SeatKind.HUMAN), *(SeatConfig(SeatKind.SMART, smart_samples=0),) * 2), log_path=None
     )
     human = HumanGuiController()
     session = SessionController(
         config,
-        controllers={"P0": human, "P1": SmartHeartsBot(num_samples=0, seed=1)},
-        engine_factory=_factory(3),
+        controllers={
+            "P0": human,
+            "P1": SmartHeartsBot(num_samples=0, seed=1),
+            "P2": SmartHeartsBot(num_samples=0, seed=2),
+        },
+        engine_factory=_p0_opens(3),
     )
     session.pace.delay = 0.0
     view = GameView(session)
@@ -345,5 +368,5 @@ def test_multi_deal_session_with_a_human_waits_on_the_result_overlay(qtbot) -> N
     assert view.controls.pause_button.text() == "Wznów"  # the runner paused between deals
     session.pace.resume()
     view.table.result.hide()
-    qtbot.waitUntil(lambda: view.model.deal_number == 2, timeout=5000)
+    qtbot.waitUntil(lambda: view.model.deal_number == 20, timeout=5000)
     session.close()

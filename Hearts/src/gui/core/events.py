@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from engine.game import PlayResult
+from engine.contracts import GameContract
+from engine.contracts import GameContract
+from engine.state import PlayResult
 from gui.core.snapshot import TableSnapshot
 
 
@@ -59,8 +61,9 @@ class TrickCompleted:
 @dataclass(frozen=True)
 class DealFinished:
     deal_number: int
-    scores: dict[str, int]
-    shot_the_moon: str | None
+    scores: dict[str, int]  # penalties of this deal
+    contract: GameContract
+    declarer: str
     totals: dict[str, int]
     wins: dict[str, int]
     ties: int

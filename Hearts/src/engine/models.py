@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass
 from enum import Enum
 from functools import total_ordering
 from typing import Self
 
 
+_INDEX_CACHE: dict[Enum, int] = {}
+
+
 def _definition_index(member: Enum) -> int:
-    return list(type(member)).index(member)
+    try:
+        return _INDEX_CACHE[member]
+    except KeyError:
+        index = _INDEX_CACHE[member] = list(type(member)).index(member)
+        return index
 
 
 @total_ordering
@@ -64,6 +70,11 @@ class Card:
     suit: Suit
     rank: Rank
 
+    @property
+    def value(self) -> int:
+        """Numeric rank: 2..10, J=11, Q=12, K=13, A=14."""
+        return _definition_index(self.rank) + 2
+
     @classmethod
     def parse(cls, value: str) -> Self:
         """Parse a 2-character code such as ``2C`` or ``QS``."""
@@ -92,40 +103,18 @@ def standard_deck() -> list[Card]:
     return sorted(Card(suit, rank) for suit in Suit for rank in Rank)
 
 
-# Cards removed so the remaining deck splits evenly. See SPEC section 2.
-_REMOVED_CODES: dict[int, frozenset[str]] = {
-    2: frozenset(),
-    3: frozenset({"2D"}),
-    4: frozenset(),
-    5: frozenset({"2D", "2S"}),
-}
+KING_PLAYER_COUNTS: tuple[int, ...] = (3, 4)
+_KING_REMOVED_CODES: dict[int, frozenset[str]] = {3: frozenset({"2C"}), 4: frozenset()}
 
 
-class Deck:
-    """Deck prepared for 2, 3, 4, or 5 players, then dealt into sorted hands."""
+def king_deck(num_players: int) -> tuple[Card, ...]:
+    """Sorted deck of the King game: 52 cards for 4 players, 51 (no ``2C``) for 3."""
+    if num_players not in _KING_REMOVED_CODES:
+        raise ValueError(f"Player count must be one of {KING_PLAYER_COUNTS}, got {num_players}")
+    removed = _KING_REMOVED_CODES[num_players]
+    return tuple(card for card in standard_deck() if str(card) not in removed)
 
-    def __init__(self, num_players: int) -> None:
-        if num_players not in _REMOVED_CODES:
-            raise ValueError(f"Player count must be 2, 3, 4, or 5, got {num_players}")
-        self.num_players: int = num_players
-        removed = _REMOVED_CODES[num_players]
-        self.cards: tuple[Card, ...] = tuple(
-            card for card in standard_deck() if str(card) not in removed
-        )
 
-    @property
-    def cards_per_player(self) -> int:
-        return len(self.cards) // self.num_players
-
-    def deal(self, rng: random.Random | None = None) -> list[list[Card]]:
-        """Deal one card at a time. Shuffle first when ``rng`` is given.
-
-        Each hand is returned sorted. The deck itself is left unchanged.
-        """
-        cards = list(self.cards)
-        if rng is not None:
-            rng.shuffle(cards)
-        hands: list[list[Card]] = [[] for _ in range(self.num_players)]
-        for index, card in enumerate(cards):
-            hands[index % self.num_players].append(card)
-        return [sorted(hand) for hand in hands]
+def king_hand_size(num_players: int) -> int:
+    """Cards per player = tricks per deal (13 for 4 players, 17 for 3)."""
+    return len(king_deck(num_players)) // num_players

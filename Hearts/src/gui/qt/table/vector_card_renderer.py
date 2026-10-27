@@ -23,7 +23,6 @@ TWO_COLOR = {"C": INK, "D": RED, "H": RED, "S": INK}
 PAPER_TOP = QColor("#ffffff")
 PAPER_BOTTOM = QColor("#eef0f5")
 EDGE = QColor("#aab0bd")
-GOLD = QColor("#d9a520")
 BACK_BASE = QColor("#27427f")
 BACK_LINE = QColor("#3d62b0")
 
@@ -135,11 +134,10 @@ class VectorCardRenderer(CachedCardRenderer):
     def _draw_face(self, painter: QPainter, rank: str, suit: str) -> None:
         color = self.suit_color(suit)
         outline = self._card_outline()
-        is_queen_of_spades = rank == "Q" and suit == "S"
         gradient = QLinearGradient(0, 0, 0, 100)
         gradient.setColorAt(0, PAPER_TOP)
         gradient.setColorAt(1, PAPER_BOTTOM)
-        painter.setPen(QPen(GOLD if is_queen_of_spades else EDGE, 2.2 if is_queen_of_spades else 1))
+        painter.setPen(QPen(EDGE, 1))
         painter.setBrush(QBrush(gradient))
         painter.drawRoundedRect(outline, 7, 7)
 
@@ -163,9 +161,6 @@ class VectorCardRenderer(CachedCardRenderer):
                           7.4, flip=row > 0)
         else:
             self._court_card(painter, rank, suit, color)
-
-        if is_queen_of_spades:
-            self._penalty_badge(painter, "13")
 
     def _corner_index(self, painter: QPainter, rank: str, suit: str, color: QColor) -> None:
         label = "10" if rank == "T" else rank
@@ -196,17 +191,6 @@ class VectorCardRenderer(CachedCardRenderer):
         painter.setBrush(QBrush(color))
         self._pip(painter, suit, _CENTER_X, 28.0, 5.8, flip=False)
         self._pip(painter, suit, _CENTER_X, 72.0, 5.8, flip=True)
-
-    def _penalty_badge(self, painter: QPainter, text: str) -> None:
-        painter.setPen(QPen(QColor("#8a6a10"), 0.8))
-        painter.setBrush(QBrush(GOLD))
-        painter.drawEllipse(QPointF(35, 89.5), 7.2, 7.2)
-        font = QFont(self.font_family)
-        font.setBold(True)
-        font.setPixelSize(9)
-        painter.setFont(font)
-        painter.setPen(QPen(QColor("#2b2106")))
-        painter.drawText(QRectF(27.8, 82.5, 14.4, 14), Qt.AlignmentFlag.AlignCenter, text)
 
     def _pip(self, painter: QPainter, suit: str, x: float, y: float, size: float, *, flip: bool) -> None:
         painter.save()

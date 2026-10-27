@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 
 from .cards import Card, full_deck, parse_card, total_tricks
 from .params import Params
-from .rounds import RoundRules, RoundType, get_rules
+from engine.contracts import GameContract
+
+from .rounds import RoundRules, get_rules
 
 
 class InvalidState(ValueError):
@@ -16,10 +18,10 @@ class InvalidState(ValueError):
 @dataclass
 class GameState:
     hand: list[str]                      # ręka gracza PRZED zagraniem (z kartą do oceny)
-    round_type: RoundType
+    contract: GameContract
     history: list[list[str]] = field(default_factory=list)   # zakończone lewy, w kolejności kładzenia
     current_trick: list[str] = field(default_factory=list)   # karty już leżące w bieżącej lewie
-    num_players: int = 4                   # 2-5 (dla rund innych niż HEARTS tylko 4)
+    num_players: int = 4                   # 3-4 (3 graczy: 17 lew, talia bez 2C)
     legal_moves: list[str] | None = None   # legalne karty wg silnika; None = tylko zasada "dokładaj do koloru"
 
 
@@ -170,8 +172,6 @@ def prepare(state: GameState, params: Params) -> Ctx:
     except ValueError as e:
         raise InvalidState(str(e)) from e
 
-    if state.round_type != RoundType.HEARTS and n_players != 4:
-        raise InvalidState("Rundy inne niż 'hearts' obsługują tylko 4 graczy.")
     n_tricks = total_tricks(n_players)
     if any(len(t) != n_players for t in history):
         raise InvalidState(f"Każda zakończona lewa musi mieć {n_players} karty.")
@@ -193,7 +193,7 @@ def prepare(state: GameState, params: Params) -> Ctx:
     if legal is not None and not set(legal) <= set(hand):
         raise InvalidState("Legalne ruchy muszą być kartami z ręki gracza.")
 
-    rules = get_rules(state.round_type)
+    rules = get_rules(state.contract, n_players)
     known_set = set(known)
     unseen = [c for c in deck if c not in known_set]
     played = {c for t in history for c in t}

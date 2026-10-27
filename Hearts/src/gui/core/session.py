@@ -1,4 +1,4 @@
-"""Running totals over several deals (GUI counterpart of ``main.play_session`` bookkeeping)."""
+"""Running totals over the deals of a match (GUI counterpart of ``main.play_session`` bookkeeping)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 
 def leaders(scores: Mapping[str, int]) -> list[str]:
-    """Players with the lowest score (lower is better in Hearts)."""
+    """Players with the lowest score (lower is better in King)."""
     best = min(scores.values())
     return [pid for pid, pts in scores.items() if pts == best]
 
@@ -25,7 +25,7 @@ class SessionStats:
         self.wins = dict.fromkeys(self.player_ids, 0)
 
     def record(self, scores: Mapping[str, int]) -> None:
-        """Add one finished deal (scores already include shooting the moon)."""
+        """Add one finished deal (penalties of that deal)."""
         for pid, pts in scores.items():
             self.totals[pid] += pts
         winners = leaders(scores)

@@ -1,6 +1,6 @@
-# Hearts (Kierki)
+# Kierki polskie (King)
 
-Jedno rozdanie kierków (2–5 graczy): człowiek, bot heurystyczny (`SmartHeartsBot`) i bot LLM (`AIBot`), w oknie albo w konsoli. Zasady są w `SPEC.md`. Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
+Partia kierków polskich (Króla) dla 3 albo 4 graczy: 7 kontraktów w stałej kolejności, każdy rozdaje po kolei każdy gracz (4 graczy: 28 rozdań, 3 graczy: 21 rozdań, talia bez 2C). Wygrywa najmniejsza suma kar. Grają: człowiek, bot heurystyczny (`SmartHeartsBot`) i bot LLM (`AIBot`), w oknie albo w konsoli. Zasady są w `SPEC.md` (a ich źródło w `rules.md`). Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
 
 ## Szybki start
 
@@ -36,7 +36,7 @@ W lobby wybierz graczy i kliknij „Rozpocznij grę”. Bez pliku z kluczem dost
 | Klucz API | `groq_api_key.txt` albo `openai_api_key.txt` — pierwsza niepusta linia, cudzysłowy na brzegach są obcinane. Pliki są w `.gitignore`. Zmienne środowiskowe nie są czytane. |
 | Modele w lobby | `groq_models.txt` i `openai_models.txt`, jeden identyfikator w linii (`#` pomija linię). Po zmianie wróć do lobby. |
 | Wytyczne bota AI | lobby, pole „wytyczne startowe”, do 100 znaków, najlepiej po angielsku. Puste = `USER_GUIDELINES` w `src/controllers/ai_bot.py`. |
-| Gracze, rozdania, tempo | lobby i ekran gry; zostają między uruchomieniami. |
+| Gracze, tempo | lobby i ekran gry; zostają między uruchomieniami. |
 
 Nadają się modele czatowe. `llama-prompt-guard`, `whisper`, `tts` czy `dall-e` nie zagrają. `404 model_not_found` znaczy, że klucz nie widzi modelu:
 
@@ -47,7 +47,7 @@ Nadają się modele czatowe. `llama-prompt-guard`, `whisper`, `tts` czy `dall-e`
 
 ## Konsola
 
-`main.py` pyta o liczbę graczy (2–5) i kontroler na każdym miejscu (człowiek, `SmartHeartsBot`, `AIBot` z Groq albo z OpenAI). Z człowiekiem przy stole jest jedno rozdanie. Same boty: program pyta o liczbę partii (jedna wypisuje ręce i zagrania, wiele — wynik każdego rozdania i podsumowanie). `0` zamiast liczby graczy uruchamia ocenę z logu.
+`main.py` pyta o liczbę graczy (3 albo 4) i kontroler na każdym miejscu (człowiek, `SmartHeartsBot`, `AIBot` z Groq albo z OpenAI). Z człowiekiem przy stole jest jedna partia. Same boty: program pyta o liczbę partii (jedna wypisuje ręce i zagrania wszystkich rozdań, wiele — wynik każdej partii i podsumowanie). Partia z czterema `SmartHeartsBot` trwa około dwóch minut. `0` zamiast liczby graczy uruchamia ocenę z logu.
 
 Każdy ruch trafia do `logs/trajectories.jsonl` (kontekst, legalne karty, karta, uzasadnienie). Pole `model` to id LLM, `human` albo `smart_bot`.
 
@@ -56,7 +56,7 @@ Każdy ruch trafia do `logs/trajectories.jsonl` (kontekst, legalne karty, karta,
 | Kontroler | Zachowanie |
 |---|---|
 | `HumanCLIController` | Czyści konsolę między turami. Indeks albo kod karty (`0` lub `2C`). |
-| `SmartHeartsBot` | Heurystyki i 40 losowań niewidocznych rąk (`num_samples`). Karta o najniższej średniej karze. Bez sieci. |
+| `SmartHeartsBot` | Heurystyki zależne od kontraktu i 40 losowań niewidocznych rąk (`num_samples`). Karta o najniższej średniej karze w rozdaniu. Bez sieci. |
 | `AIBot` | Jedno zapytanie do API (Groq albo OpenAI) na ruch, gdy legalnych kart jest więcej niż jedna. |
 
 ## AIBot
@@ -66,7 +66,6 @@ Dostawca (`provider="groq"` lub `"openai"`) wybiera SDK, plik z kluczem i listę
 - Jedna legalna karta jest grana od razu.
 - Błąd API, pusta odpowiedź albo karta spoza listy: pierwsza legalna karta. Odrzucenie przez API → `logs/ai_api_errors.jsonl`. Odpowiedź, która nie jest legalną kartą → `logs/ai_illegal_moves.jsonl`.
 - Pełne zapytanie i surowa odpowiedź → `logs/ai_exchanges.jsonl` (bez klucza).
-- Few-shot jest wyłączony (`num_examples=0`). Przykłady z `logs/trajectories.jsonl` dokładają się przez `num_examples` (ostatnie rekordy albo `example_selection="random"`). Do promptu wchodzą tylko rekordy z więcej niż jedną kartą legalną.
 
 Pusty albo brakujący klucz kończy się `RuntimeError` przy pierwszym zapytaniu.
 
@@ -80,7 +79,7 @@ W oknie ten sam model może usiąść kilka razy. Każde miejsce poza jednym pot
 
 Konsola: `0` przy pytaniu o liczbę graczy. Okno: zakładka „Jakość” liczy ruch przed zagraniem; raport w lobby liczy cały `logs/trajectories.jsonl` (ten sam tekst co tryb `0`).
 
-Dla każdego ruchu odtwarzany jest stan rozdania (kier = 1 pkt, dama pik = 13 pkt) i wychodzi poprawność oraz agresywność (0–100). Ruchy z jedną legalną kartą nie wchodzą do średnich. Pomijani gracze: `IGNORED_PLAYERS` na początku `main.py`, domyślnie `("human", "smart_bot")`. Raport używa domyślnych parametrów ewaluatora; parametry z okna obowiązują tylko w bieżącej sesji.
+Dla każdego ruchu odtwarzany jest stan rozdania (kary bieżącego kontraktu) i wychodzi poprawność oraz agresywność (0–100). Ruchy z jedną legalną kartą nie wchodzą do średnich. Pomijani gracze: `IGNORED_PLAYERS` na początku `main.py`, domyślnie `("human", "smart_bot")`. Raport używa domyślnych parametrów ewaluatora; parametry z okna obowiązują tylko w bieżącej sesji.
 
 „Usuń statystyki bota” kasuje jego rekordy z logów AI oraz całe rozdania z `trajectories.jsonl`, w których grał.
 

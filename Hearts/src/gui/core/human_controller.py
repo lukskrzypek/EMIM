@@ -6,7 +6,7 @@ import queue
 import threading
 
 from controllers.base import PlayerController
-from engine.game import PlayerObservation
+from engine.observation import PlayerObservation
 
 
 class MoveCancelled(Exception):

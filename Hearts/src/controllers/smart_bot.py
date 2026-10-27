@@ -1,26 +1,29 @@
-"""Algorithmic Hearts bot: expert heuristics + Monte Carlo over hidden hands (no LLM)."""
+"""Algorithmic King bot: contract-aware heuristics + Monte Carlo over hidden hands (no LLM).
+
+All rules (legal moves, trick winner, penalties) come from ``engine.contracts``; this
+module only decides which legal card to play.
+"""
 
 from __future__ import annotations
 
 import random
-import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from controllers.base import PlayerController
-from engine.game import (
-    QUEEN_OF_SPADES,
-    TOTAL_POINTS,
-    PlayerObservation,
-    _legal_cards,
-    card_points,
+from engine.contracts import (
+    KING_OF_HEARTS,
+    GameContract,
+    card_penalty,
+    evaluate_trick_penalty,
+    legal_cards,
+    trick_winner,
 )
-from engine.models import Card, Deck, Rank, Suit
+from engine.models import Card, Suit, king_deck, king_hand_size
+from engine.observation import PlayerObservation
 
-_PLAY_RE = re.compile(r"(P\d+):([2-9TJQKA][CDSH])")
 _MAX_DEAL_ATTEMPTS = 40
-_RANKS: list[Rank] = list(Rank)
 
 Trick = Sequence[tuple[str, Card]]
 
@@ -29,78 +32,55 @@ Trick = Sequence[tuple[str, Card]]
 
 
 def _highest(cards: Sequence[Card]) -> Card:
-    return max(cards, key=lambda c: c.rank)
+    return max(cards, key=lambda c: c.value)
 
 
-def _lowest(cards: Sequence[Card]) -> Card:
-    return min(cards, key=lambda c: c.rank)
-
-
-def _follow(legal: Sequence[Card], trick: Trick, num_players: int) -> Card:
-    """Following suit: duck under the table's top card, else lose as little as possible."""
+def _follow(
+    legal: Sequence[Card],
+    trick: Trick,
+    contract: GameContract,
+    num_players: int,
+) -> Card:
+    """Following suit: duck under the table's top card (dumping penalty cards if possible)."""
     lead = trick[0][1].suit
-    top = max(c.rank for _, c in trick if c.suit is lead)
-    safe = [c for c in legal if c.rank < top]
+    top = max(c.value for _, c in trick if c.suit is lead)
+    safe = [c for c in legal if c.value < top]
     if safe:
-        return _highest(safe)
-    # Forced to take the trick: never volunteer the queen if there is an alternative.
-    candidates = [c for c in legal if c != QUEEN_OF_SPADES] or list(legal)
-    if len(trick) == num_players - 1:
-        return _highest(candidates)  # we win anyway: shed the most dangerous card
-    return _lowest(candidates)  # later players may still overtake us
+        return max(safe, key=lambda c: (card_penalty(c, contract), c.value))
+    # Forced to take the trick unless someone behind us plays higher.
+    if len(trick) == num_players - 1:  # last to play: we win, so shed the harmless high card
+        return min(legal, key=lambda c: (card_penalty(c, contract), -c.value))
+    return min(legal, key=lambda c: (card_penalty(c, contract), c.value))
 
 
-def _dump(legal: Sequence[Card], *, qs_played: bool) -> Card:
+def _dump(legal: Sequence[Card], contract: GameContract) -> Card:
     """Void in the led suit: whatever we throw lands on someone else."""
-    if QUEEN_OF_SPADES in legal:
-        return QUEEN_OF_SPADES
-    if not qs_played:
-        risky = [c for c in legal if c.suit is Suit.SPADES and c.rank > Rank.QUEEN]
-        if risky:
-            return _highest(risky)
-    hearts = [c for c in legal if c.suit is Suit.HEARTS]
-    if hearts:
-        return _highest(hearts)
-    suit_len = Counter(c.suit for c in legal)
-    return max(legal, key=lambda c: (c.rank, -suit_len[c.suit]))
+    return max(legal, key=lambda c: (card_penalty(c, contract), c.value))
 
 
-def _lead(legal: Sequence[Card], hand: Sequence[Card], *, qs_played: bool) -> Card:
-    """Leading: low cards from the longest safe suit; avoid hearts and spades."""
-    plain = [c for c in legal if c.suit not in (Suit.HEARTS, Suit.SPADES)]
-    if plain:
-        length = Counter(c.suit for c in hand)
-        # Longest suit first; on ties start with the suit whose lowest card is lowest.
-        lows = {s: _lowest([c for c in plain if c.suit is s]) for s in {c.suit for c in plain}}
-        suit = max(lows, key=lambda s: (length[s], -_RANKS.index(lows[s].rank)))
-        return lows[suit]
-
-    spades = [c for c in legal if c.suit is Suit.SPADES]
-    low_spades = [c for c in spades if qs_played or c.rank < Rank.QUEEN]
-    if low_spades:
-        return _lowest(low_spades)
-    hearts = [c for c in legal if c.suit is Suit.HEARTS]
-    if hearts:
-        return _lowest(hearts)
-    return _lowest([c for c in legal if c != QUEEN_OF_SPADES] or list(legal))
+def _lead(legal: Sequence[Card], hand: Sequence[Card], contract: GameContract) -> Card:
+    """Leading: the lowest harmless card, from the longest suit on ties."""
+    clean = [c for c in legal if card_penalty(c, contract) == 0] or list(legal)
+    length = Counter(c.suit for c in hand)
+    return min(clean, key=lambda c: (c.value, -length[c.suit]))
 
 
 def heuristic_move(
     legal: Sequence[Card],
     hand: Sequence[Card],
     trick: Trick,
+    contract: GameContract,
     *,
-    qs_played: bool,
     num_players: int,
 ) -> Card:
-    """Expert rule-of-thumb choice among ``legal`` (non-empty)."""
+    """Rule-of-thumb choice among ``legal`` (non-empty): stay out of penalties."""
     if len(legal) == 1:
         return legal[0]
     if not trick:
-        return _lead(legal, hand, qs_played=qs_played)
+        return _lead(legal, hand, contract)
     if legal[0].suit is trick[0][1].suit:
-        return _follow(legal, trick, num_players)
-    return _dump(legal, qs_played=qs_played)
+        return _follow(legal, trick, contract, num_players)
+    return _dump(legal, contract)
 
 
 # ------------------------------------------------------------ hidden state
@@ -117,10 +97,11 @@ class _Context:
     unknown: list[Card]
     capacities: dict[str, int]  # cards still held by each opponent
     voids: dict[str, set[Suit]]
-    hearts_broken: bool
+    contract: GameContract
     trick_number: int
-    base_points: dict[str, int]
-    qs_played: bool
+    total_tricks: int
+    base_points: dict[str, int]  # penalties already taken in this deal
+    king_of_hearts_played: bool
 
 
 def _build_context(observation: PlayerObservation) -> _Context | None:
@@ -128,27 +109,22 @@ def _build_context(observation: PlayerObservation) -> _Context | None:
     n = observation.num_players
     ids = [f"P{i}" for i in range(n)]
     me = observation.player_id
-    deck = Deck(n)
+    deck = king_deck(n)
+    size = king_hand_size(n)
 
-    plays: list[tuple[str, Card]] = []
-    for line in observation.trick_history:
-        plays.extend((p, Card.parse(c)) for p, c in _PLAY_RE.findall(line.split("->")[0]))
+    plays = [(p, Card.parse(c)) for p, c in observation.played_cards]
     trick = [(p, Card.parse(c)) for p, c in observation.current_trick]
-    plays.extend(trick)
-
     hand = [Card.parse(c) for c in observation.hand]
     seen = {c for _, c in plays} | set(hand)
-    unknown = [c for c in deck.cards if c not in seen]
+    unknown = [c for c in deck if c not in seen]
 
     played_by = Counter(p for p, _ in plays)
-    capacities = {
-        p: deck.cards_per_player - played_by[p] for p in ids if p != me
-    }
+    capacities = {p: size - played_by[p] for p in ids if p != me}
     if (
         me not in ids
         or any(v < 0 for v in capacities.values())
         or sum(capacities.values()) != len(unknown)
-        or len(hand) != deck.cards_per_player - played_by[me]
+        or len(hand) != size - played_by[me]
     ):
         return None
 
@@ -161,10 +137,11 @@ def _build_context(observation: PlayerObservation) -> _Context | None:
         unknown=unknown,
         capacities=capacities,
         voids=voids,
-        hearts_broken=observation.hearts_broken,
+        contract=observation.contract,
         trick_number=observation.trick_number,
+        total_tricks=observation.total_tricks,
         base_points={p: observation.scores.get(p, 0) for p in ids},
-        qs_played=any(c == QUEEN_OF_SPADES for _, c in plays),
+        king_of_hearts_played=any(c == KING_OF_HEARTS for _, c in plays),
     )
 
 
@@ -211,42 +188,44 @@ def _deal_unknown(
 # -------------------------------------------------------------- simulation
 
 
-class _Sim:
-    """Minimal hearts state machine used for rollouts (heuristic play for everyone)."""
+class _Rollout:
+    """Plays the rest of one deal with the heuristic policy for every seat.
+
+    Only the turn mechanics live here; legality, the trick winner and penalties are
+    the engine's functions.
+    """
 
     def __init__(self, ctx: _Context, hands: dict[str, list[Card]]) -> None:
         self.ids = ctx.player_ids
+        self.contract = ctx.contract
+        self.total_tricks = ctx.total_tricks
         self.hands = hands
         self.trick = list(ctx.trick)
-        self.hearts_broken = ctx.hearts_broken
         self.trick_number = ctx.trick_number
         self.points = dict(ctx.base_points)
-        self.qs_played = ctx.qs_played
+        self.king_of_hearts_played = ctx.king_of_hearts_played
         self.current = ctx.me
 
     def legal(self, pid: str) -> list[Card]:
-        return _legal_cards(
+        return legal_cards(
             self.hands[pid],
             self.trick,
-            first_trick=self.trick_number == 1,
-            hearts_broken=self.hearts_broken,
+            self.contract,
+            king_of_hearts_played=self.king_of_hearts_played,
         )
 
     def play(self, pid: str, card: Card) -> None:
         self.hands[pid].remove(card)
         self.trick.append((pid, card))
-        if card.suit is Suit.HEARTS:
-            self.hearts_broken = True
-        if card == QUEEN_OF_SPADES:
-            self.qs_played = True
+        if card == KING_OF_HEARTS:
+            self.king_of_hearts_played = True
         if len(self.trick) < len(self.ids):
             self.current = self.ids[(self.ids.index(pid) + 1) % len(self.ids)]
             return
-        lead = self.trick[0][1].suit
-        winner, _ = max(
-            (e for e in self.trick if e[1].suit is lead), key=lambda e: e[1].rank
+        winner = trick_winner(self.trick)
+        self.points[winner] += evaluate_trick_penalty(
+            [c for _, c in self.trick], self.trick_number, self.contract, self.total_tricks
         )
-        self.points[winner] += sum(card_points(c) for _, c in self.trick)
         self.trick = []
         self.trick_number += 1
         self.current = winner
@@ -254,21 +233,14 @@ class _Sim:
     def run(self) -> None:
         while any(self.hands.values()):
             pid = self.current
-            legal = self.legal(pid)
             card = heuristic_move(
-                legal,
+                self.legal(pid),
                 self.hands[pid],
                 self.trick,
-                qs_played=self.qs_played,
+                self.contract,
                 num_players=len(self.ids),
             )
             self.play(pid, card)
-
-    def final_score(self, pid: str) -> int:
-        """Deal score of ``pid`` with Shooting the Moon applied."""
-        if any(v == TOTAL_POINTS for v in self.points.values()):
-            return 0 if self.points[pid] == TOTAL_POINTS else TOTAL_POINTS
-        return self.points[pid]
 
 
 # --------------------------------------------------------------------- bot
@@ -293,7 +265,7 @@ class SmartHeartsBot(PlayerController):
         *,
         seed: int | None = None,
         rng: random.Random | None = None,
-        heuristic_bias: float = 0.15,
+        heuristic_bias: float = 3.0,
     ) -> None:
         self._num_samples = num_samples
         self._rng = rng if rng is not None else random.Random(seed)
@@ -306,41 +278,29 @@ class SmartHeartsBot(PlayerController):
         if len(legal) == 1:
             return legal[0]
 
-        legal_cards = sorted(Card.parse(code) for code in legal)
+        legal_cards_ = sorted(Card.parse(code) for code in legal)
         ctx = _build_context(observation)
         hand = ctx.hand if ctx else [Card.parse(c) for c in observation.hand]
         trick = ctx.trick if ctx else [(p, Card.parse(c)) for p, c in observation.current_trick]
-        qs_played = ctx.qs_played if ctx else self._qs_played_fallback(observation)
         suggestion = heuristic_move(
-            legal_cards,
-            hand,
-            trick,
-            qs_played=qs_played,
-            num_players=observation.num_players,
+            legal_cards_, hand, trick, observation.contract, num_players=observation.num_players
         )
         if ctx is None or self._num_samples <= 0:
             return str(suggestion)
 
-        totals = dict.fromkeys(legal_cards, 0)
+        totals = dict.fromkeys(legal_cards_, 0)
         for _ in range(self._num_samples):
             others = _deal_unknown(ctx.unknown, ctx.capacities, ctx.voids, self._rng)
-            for card in legal_cards:
+            for card in legal_cards_:
                 hands = {p: list(h) for p, h in others.items()}
                 hands[ctx.me] = list(ctx.hand)
-                sim = _Sim(ctx, hands)
+                sim = _Rollout(ctx, hands)
                 sim.play(ctx.me, card)
                 sim.run()
-                totals[card] += sim.final_score(ctx.me)
+                totals[card] += sim.points[ctx.me]
 
         def cost(card: Card) -> float:
             penalty = 0.0 if card == suggestion else self._bias
             return totals[card] / self._num_samples + penalty
 
-        return str(min(legal_cards, key=cost))
-
-    @staticmethod
-    def _qs_played_fallback(observation: PlayerObservation) -> bool:
-        qs = str(QUEEN_OF_SPADES)
-        return any(qs in line for line in observation.trick_history) or any(
-            c == qs for _, c in observation.current_trick
-        )
+        return str(min(legal_cards_, key=cost))

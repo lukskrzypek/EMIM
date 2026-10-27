@@ -1,9 +1,9 @@
 """Publiczne API: ocena posunięć w kierkach (poprawność + agresywność).
 
-    from evaluation import GameState, RoundType, evaluate_move, evaluate_all
+    from evaluation import GameState, GameContract, evaluate_move, evaluate_all
 
-Port biblioteki "kierki" (system oceny) dostosowany do silnika Hearts: 2-5 graczy,
-runda RoundType.HEARTS (kier = 1 pkt, dama pik = 13 pkt) i legalne ruchy z silnika.
+Port biblioteki "kierki" (system oceny) dostosowany do silnika King: 3-4 graczy,
+kontrakty i kary z ``engine.contracts`` oraz legalne ruchy z silnika.
 Zasady działania i parametry: evaluation/strategy.py, evaluation/params.py.
 """
 from __future__ import annotations

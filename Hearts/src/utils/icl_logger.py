@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from engine.game import PlayerObservation
+from engine.observation import PlayerObservation
 
 DEFAULT_LOG_PATH = Path("logs") / "trajectories.jsonl"
 

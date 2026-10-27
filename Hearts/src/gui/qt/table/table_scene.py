@@ -27,6 +27,7 @@ from gui.qt.table.seat_layout import (
     slot_of,
     trick_card_point,
 )
+from utils.contract_text import WARN_POINTS, contract_label
 from gui.qt.theme import ACCENT, BORDER, GOOD, SURFACE, TEXT, TEXT_MUTED, WARN
 
 PLATE_W, PLATE_H = 206.0, 50.0
@@ -82,7 +83,7 @@ class SeatPlate(QGraphicsItem):
         big = QFont("Segoe UI", 15)
         big.setBold(True)
         painter.setFont(big)
-        painter.setPen(QColor(WARN if self.points >= 13 else TEXT))
+        painter.setPen(QColor(WARN if self.points >= WARN_POINTS else TEXT))
         painter.drawText(
             QRectF(rect.right() - 62, rect.top() + 1, 52, 26),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
@@ -240,11 +241,11 @@ class TableScene(QGraphicsScene):
                 is_viewer=pid == viewer and model.has_humans,
                 status=status,
             )
-        total_tricks = len(model.all_cards) // n if n else 0
-        hearts = "kiery złamane" if snapshot.hearts_broken else "kiery niezłamane"
+        total_tricks = snapshot.total_tricks
         self.info.setText(
             f"Rozdanie {model.deal_number}/{model.total_deals}  ·  "
-            f"lewa {min(snapshot.trick_number, total_tricks)}/{total_tricks}  ·  {hearts}"
+            f"{contract_label(snapshot.contract)} (rozdaje {snapshot.declarer})  ·  "
+            f"lewa {min(snapshot.trick_number, total_tricks)}/{total_tricks}"
         )
 
     @property

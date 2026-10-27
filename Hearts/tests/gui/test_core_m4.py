@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from collector import Collector
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine
+from engine.state import GameState
 from evaluation.params import Params
 from evaluation.report import build_report
 from evaluation.trajectories import load_moves
@@ -35,7 +35,7 @@ def test_parse_ignored() -> None:
 
 def test_report_of_a_real_log_equals_the_library_report(tmp_path: Path) -> None:
     log = tmp_path / "trajectories.jsonl"
-    _play(4, seed=21, log=log, deals=2)
+    _play(4, seed=21, log=log, start_deal=4 * 6)
 
     result = load_report(log, ())
     assert result.error is None and result.report is not None
@@ -87,7 +87,7 @@ def test_lobby_state_round_trip() -> None:
                           ai_guidelines="Prefer ducking early.", ai_name="bold")
     seats[2] = SeatConfig(SeatKind.SMART, smart_samples=0)
     seats[3] = SeatConfig(SeatKind.AI, ai_provider="openai", ai_model="gpt-4o")
-    state = LobbyState(players=3, deals=25, seats=tuple(seats))
+    state = LobbyState(players=3, seats=tuple(seats))
     assert LobbyState.from_json(state.to_json()) == state
 
 
@@ -118,7 +118,6 @@ def test_lobby_state_survives_garbage(text: str | None) -> None:
 def test_lobby_state_repairs_bad_fields() -> None:
     raw = {
         "players": 9,
-        "deals": 10**9,
         "fixed_seed": 1,  # options of older versions are ignored
         "seed": -4,
         "seats": [
@@ -132,8 +131,7 @@ def test_lobby_state_repairs_bad_fields() -> None:
         ],
     }
     state = LobbyState.from_json(json.dumps(raw))
-    assert state.players == 4  # not one of 2-5
-    assert state.deals == 1000  # clamped
+    assert state.players == 4  # not one of 3-4
     assert state.seats[1].ai_name == "a_b_c" + "z" * 5  # file-safe and 10 characters at most
     guidelines = state.seats[1].ai_guidelines
     assert len(guidelines) == 100 and "\n" not in guidelines and guidelines.startswith("line one x")
@@ -142,7 +140,7 @@ def test_lobby_state_repairs_bad_fields() -> None:
     assert state.seats[1].ai_model  # blank model -> a usable one
     assert state.seats[2] == default_seats()[2]
     assert state.seats[3].smart_samples == 12
-    assert len(state.seats) == 5
+    assert len(state.seats) == 4
 
 
 # ------------------------------------------------------------------- params
@@ -179,7 +177,7 @@ def _aggressiveness(evaluator: LiveEvaluator) -> float:
         pace=PaceControl(0),
         controllers={f"P{i}": SmartHeartsBot(num_samples=0, seed=i) for i in range(4)},
         analyzer=evaluator,
-        engine_factory=lambda n, k: HeartsGameEngine(n, seed=9),
+        engine_factory=lambda n: GameState.new(n, seed=9, start_deal=n * 7),
     )
     runner.start()
     sink.wait_finished(timeout=30)

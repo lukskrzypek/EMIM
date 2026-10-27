@@ -12,7 +12,8 @@ from collector import Collector
 from controllers.base import PlayerController
 from controllers.ai_bot import AIBot
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.observation import PlayerObservation
+from engine.state import GameState
 from gui.core.events import BotUnavailable, MovePlayed, Notice, SessionFinished
 from gui.core.game_runner import GameRunner
 from gui.core.ai_failures import classify_failure
@@ -79,7 +80,7 @@ OPENAI_PROJECT_DENIED = (
 
 
 def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n, k: HeartsGameEngine(n, seed=seed + k)
+    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7)  # just the last deal
 
 
 class FailsFrom(PlayerController):
@@ -98,7 +99,7 @@ class FailsFrom(PlayerController):
         return observation.legal_moves[0]
 
 
-def _config(n: int = 2) -> SessionConfig:
+def _config(n: int = 3) -> SessionConfig:
     return SessionConfig(tuple(SeatConfig(SeatKind.AI if i == 0 else SeatKind.SMART,
                                           ai_model="m/x", smart_samples=0) for i in range(n)),
                          log_path=None)
@@ -108,7 +109,11 @@ def _run(controller: PlayerController) -> Collector:
     sink = Collector()
     runner = GameRunner(
         _config(), sink, pace=PaceControl(0),
-        controllers={"P0": controller, "P1": SmartHeartsBot(num_samples=0, seed=1)},
+        controllers={
+            "P0": controller,
+            "P1": SmartHeartsBot(num_samples=0, seed=1),
+            "P2": SmartHeartsBot(num_samples=0, seed=2),
+        },
         engine_factory=_factory(4),
     )
     runner.start()
@@ -208,7 +213,11 @@ def test_game_view_tells_the_user_the_tokens_are_gone(qtbot, monkeypatch) -> Non
     monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()) or 0)
     session = SessionController(
         _config(),
-        controllers={"P0": FailsFrom(3, DAILY), "P1": SmartHeartsBot(num_samples=0, seed=1)},
+        controllers={
+            "P0": FailsFrom(3, DAILY),
+            "P1": SmartHeartsBot(num_samples=0, seed=1),
+            "P2": SmartHeartsBot(num_samples=0, seed=2),
+        },
         engine_factory=_factory(4),
     )
     session.pace.delay = 0.0

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from controllers.base import PlayerController
-from engine.game import PlayerObservation
+from engine.observation import PlayerObservation
 
 
 def _separate_players() -> None:

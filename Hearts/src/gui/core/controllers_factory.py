@@ -8,7 +8,6 @@ from pathlib import Path
 from controllers.base import PlayerController
 from controllers.ai_bot import AIBot, get_provider, read_api_key
 from controllers.smart_bot import SmartHeartsBot
-from gui.config import LOG_PATH
 from gui.core.human_controller import HumanGuiController
 from gui.core.seat_config import SeatConfig, SeatKind, clean_guidelines
 
@@ -17,8 +16,6 @@ def build_controller(
     seat: SeatConfig,
     player_id: str,
     index: int,
-    *,
-    trajectories_path: Path | None = LOG_PATH,
 ) -> PlayerController:
     """Same construction as ``main._make_controller`` (``SmartHeartsBot`` seed = seat index)."""
     if seat.kind is SeatKind.HUMAN:
@@ -30,7 +27,6 @@ def build_controller(
             player_id,
             model=seat.ai_model,
             provider=seat.ai_provider,
-            trajectories_path=trajectories_path,  # few-shot stays off: num_examples defaults to 0
             name=seat.ai_name,  # -> model_name, memory file ..._<name>.txt and the bot's logs
             # empty -> None keeps the bot's own default (USER_GUIDELINES in ai_bot.py)
             guidelines=clean_guidelines(seat.ai_guidelines) or None,

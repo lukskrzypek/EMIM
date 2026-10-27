@@ -16,11 +16,14 @@ from pathlib import Path
 from typing import Any
 
 from .context import GameState
-from .rounds import RoundType
+from engine.contracts import GameContract
 
 UNKNOWN_MODEL = "unknown"  # starsze rekordy nie mają pola "model"
 
-_HEADER_RE = re.compile(r"^HEARTS (\d)p \| You: (\w+) \| Trick (\d+)")
+# Nagłówek promptu silnika ("KING 4p | You: P1 | Deal 5/28 NO_HEARTS (declarer P0) | Trick 3/13 | ...").
+_HEADER_RE = re.compile(
+    r"^KING (\d)p \| You: (\w+) \| Deal \d+/\d+ (\w+) \(declarer \w+\) \| Trick (\d+)/\d+"
+)
 
 
 @dataclass(frozen=True)
@@ -44,8 +47,8 @@ class _BadRecord(ValueError):
     pass
 
 
-def _parse_prompt(prompt: str) -> tuple[int, int, list[str], list[tuple[str, str]]]:
-    """(liczba graczy, numer lewy, ręka, karty na stole jako (gracz, karta))."""
+def _parse_prompt(prompt: str) -> tuple[int, int, list[str], list[tuple[str, str]], GameContract]:
+    """(liczba graczy, numer lewy, ręka, karty na stole jako (gracz, karta), kontrakt)."""
     lines = prompt.splitlines()
     header = _HEADER_RE.match(lines[0]) if lines else None
     if header is None:
@@ -64,7 +67,11 @@ def _parse_prompt(prompt: str) -> tuple[int, int, list[str], list[tuple[str, str
             if not sep:
                 raise _BadRecord("zły zapis stołu")
             current.append((player, card))
-    return int(header.group(1)), int(header.group(3)), hand, current
+    try:
+        contract = GameContract(header.group(3))
+    except ValueError:
+        raise _BadRecord("nieznany kontrakt") from None
+    return int(header.group(1)), int(header.group(4)), hand, current, contract
 
 
 def _model_of(record: dict[str, Any]) -> str:
@@ -89,7 +96,7 @@ def load_moves(path: str | Path, ignored_models: Collection[str] = ()) -> LoadRe
                 player_id = record["player_id"]
                 chosen = record["chosen_move"]
                 legal = record["legal_moves"]
-                n_players, trick_no, hand, current = _parse_prompt(record["prompt_context"])
+                n_players, trick_no, hand, current, contract = _parse_prompt(record["prompt_context"])
                 if not isinstance(player_id, str) or not isinstance(chosen, str) or chosen not in legal:
                     raise _BadRecord("zły ruch w rekordzie")
             except (json.JSONDecodeError, KeyError, TypeError, _BadRecord) as exc:
@@ -118,7 +125,7 @@ def load_moves(path: str | Path, ignored_models: Collection[str] = ()) -> LoadRe
                 ]
                 state = GameState(
                     hand=hand,
-                    round_type=RoundType.HEARTS,
+                    contract=contract,
                     history=history,
                     current_trick=[card for _, card in current],
                     num_players=n_players,

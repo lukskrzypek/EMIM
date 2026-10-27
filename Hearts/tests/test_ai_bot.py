@@ -17,7 +17,7 @@ from controllers.ai_bot import (
     parse_card,
     read_api_key,
 )
-from engine.game import PlayerObservation
+from engine.observation import PlayerObservation
 
 
 class FakeClient:
@@ -44,35 +44,12 @@ def make_obs(legal: list[str], player_id: str = "P1") -> PlayerObservation:
         current_trick=[("P0", "KC")],
         trick_history=[],
         exposed_voids={"P0": [], "P1": []},
-        hearts_broken=False,
         scores={"P0": 0, "P1": 0},
         legal_moves=legal,
         trick_number=3,
         current_player=player_id,
-        num_players=2,
+        num_players=4,
     )
-
-
-def write_trajectories(path: Path, n: int) -> None:
-    with path.open("w", encoding="utf-8") as handle:
-        for i in range(n):
-            record = {
-                "player_id": "P0",
-                "prompt_context": f"HEARTS 2p | EXAMPLE-{i}",
-                "legal_moves": ["3C", "9C"],
-                "chosen_move": "9C",
-                "reasoning": "",
-            }
-            handle.write(json.dumps(record) + "\n")
-        # Forced move: carries no decision information, must be skipped.
-        forced = {
-            "player_id": "P0",
-            "prompt_context": "FORCED-EXAMPLE",
-            "legal_moves": ["2C"],
-            "chosen_move": "2C",
-            "reasoning": "",
-        }
-        handle.write(json.dumps(forced) + "\n")
 
 
 @pytest.fixture(autouse=True)
@@ -167,7 +144,7 @@ def test_exchange_log_stores_prompt_and_reply(tmp_path: Path) -> None:
     assert record["player_id"] == "P1"
     assert record["model"] == DEFAULT_MODEL
     assert [m["role"] for m in record["messages"]] == ["system", "user"]
-    assert "Hearts" in record["messages"][0]["content"]
+    assert "Kierki" in record["messages"][0]["content"]
     assert "Legal" in record["messages"][1]["content"]
     assert record["response"] == {
         "content": '{"card": "QC", "reasoning": "safe duck"}',
@@ -254,17 +231,15 @@ def test_api_key_is_read_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert seen == ["gsk_test"]
 
 
-def test_prompt_contains_rules_state_examples_and_legal_reminder(tmp_path: Path) -> None:
-    path = tmp_path / "trajectories.jsonl"
-    write_trajectories(path, 5)
+def test_prompt_contains_rules_state_and_legal_reminder() -> None:
     client = FakeClient('{"card": "3C"}')
-    bot = AIBot("P1", trajectories_path=path, num_examples=2, client=client)
+    bot = AIBot("P1", client=client)
     obs = make_obs(["3C", "QC", "AC"])
     bot.select_move(obs)
 
     system, user = client.calls[0]["messages"]
     assert system["role"] == "system" and user["role"] == "user"
-    assert "Hearts" in system["content"] and "QS" in system["content"]
+    assert "Kierki" in system["content"] and "NO_HEARTS" in system["content"]
     assert "P1" in system["content"]
 
     content = user["content"]
@@ -272,50 +247,6 @@ def test_prompt_contains_rules_state_examples_and_legal_reminder(tmp_path: Path)
     assert "### Current state (you are P1)" in content
     assert "Choose exactly one card" not in content
     assert "Reply with only JSON" not in content
-    # Last two informative examples only; forced move skipped.
-    assert "EXAMPLE-4" in content and "EXAMPLE-3" in content
-    assert "EXAMPLE-2" not in content
-    assert "FORCED-EXAMPLE" not in content
-    assert 'Answer: {"card": "9C"}' in content
-
-
-def test_num_examples_defaults_to_zero(tmp_path: Path) -> None:
-    path = tmp_path / "trajectories.jsonl"
-    write_trajectories(path, 5)
-    bot = AIBot("P1", trajectories_path=path, client=FakeClient())
-    content = bot.build_messages(make_obs(["3C", "QC"]))[1]["content"]
-    assert "Example" not in content
-    assert "EXAMPLE-" not in content
-
-
-def test_random_example_selection_is_seeded(tmp_path: Path) -> None:
-    path = tmp_path / "trajectories.jsonl"
-    write_trajectories(path, 20)
-    obs = make_obs(["3C", "QC"])
-
-    def user_prompt(seed: int) -> str:
-        bot = AIBot(
-            "P1",
-            trajectories_path=path,
-            num_examples=3,
-            example_selection="random",
-            client=FakeClient(),
-            seed=seed,
-        )
-        return bot.build_messages(obs)[1]["content"]
-
-    assert user_prompt(7) == user_prompt(7)
-
-
-def test_missing_trajectory_file_is_ignored(tmp_path: Path) -> None:
-    bot = AIBot("P1", trajectories_path=tmp_path / "nope.jsonl", client=FakeClient())
-    content = bot.build_messages(make_obs(["3C", "QC"]))[1]["content"]
-    assert "Example" not in content
-
-
-def test_invalid_example_selection_rejected() -> None:
-    with pytest.raises(ValueError):
-        AIBot("P1", example_selection="newest")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

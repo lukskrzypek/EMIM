@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from controllers.base import PlayerController
 from controllers.smart_bot import SmartHeartsBot, _build_context, _deal_unknown
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.contracts import CONTRACT_ORDER, GameContract, contract_total_penalty
 from engine.models import Card
+from engine.observation import PlayerObservation
+from engine.state import GameState
 
 
 def make_obs(
@@ -15,21 +19,20 @@ def make_obs(
     legal: list[str],
     trick: list[tuple[str, str]] | None = None,
     *,
-    history: list[str] | None = None,
-    hearts_broken: bool = False,
+    contract: GameContract = GameContract.NO_TRICKS,
     trick_number: int = 5,
 ) -> PlayerObservation:
     return PlayerObservation(
         player_id="P0",
         hand=hand,
         current_trick=trick or [],
-        trick_history=history or [],
+        trick_history=[],
         exposed_voids={},
-        hearts_broken=hearts_broken,
         scores={"P0": 0, "P1": 0, "P2": 0, "P3": 0},
         legal_moves=legal,
         trick_number=trick_number,
         current_player="P0",
+        contract=contract,
     )
 
 
@@ -46,17 +49,17 @@ class RandomBot(PlayerController):
         return self._rng.choice(observation.legal_moves)
 
 
-def play_deal(engine: HeartsGameEngine, controllers: dict[str, PlayerController]) -> dict[str, int]:
-    while not engine.is_over:
-        pid = engine.current_player
+def play_deal(state: GameState, controllers: dict[str, PlayerController]) -> dict[str, int]:
+    """Play the current deal to its end (the state must not auto-advance)."""
+    state.auto_advance = False
+    while not (state.deal_finished or state.is_over):
+        pid = state.current_player
         assert pid is not None
-        obs = engine.get_player_observation(pid)
+        obs = state.get_player_observation(pid)
         move = controllers[pid].select_move(obs)
         assert move in obs.legal_moves
-        engine.play_card(pid, move)
-    scores = engine.final_scores
-    assert scores is not None
-    return scores
+        state.play_card(pid, move)
+    return dict(state.scores)
 
 
 # ------------------------------------------------------------ basic contract
@@ -72,114 +75,113 @@ def test_single_legal_move_returned_immediately() -> None:
 
 
 def test_no_legal_moves_raises() -> None:
-    obs = make_obs(["2C"], [])
-    try:
-        SmartHeartsBot().select_move(obs)
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError")
+    with pytest.raises(ValueError):
+        SmartHeartsBot().select_move(make_obs(["2C"], []))
 
 
 # --------------------------------------------------------------- heuristics
 
 
 def test_duck_plays_highest_card_below_table_top() -> None:
-    obs = make_obs(
-        ["3C", "9C", "QC", "AC", "5D"],
-        ["3C", "9C", "QC", "AC"],
-        [("P3", "7C"), ("P1", "KC")],
-    )
+    obs = make_obs(["3C", "9C", "QC", "AC", "5D"], ["3C", "9C", "QC", "AC"], [("P3", "7C"), ("P1", "KC")])
     assert rules_bot().select_move(obs) == "QC"
 
 
-def test_duck_sloughs_queen_of_spades_under_higher_spade() -> None:
-    obs = make_obs(["3S", "QS", "5C"], ["3S", "QS"], [("P3", "AS")])
+def test_duck_sloughs_queen_under_higher_card() -> None:
+    obs = make_obs(
+        ["3S", "QS", "5C"], ["3S", "QS"], [("P3", "AS")], contract=GameContract.NO_QUEENS
+    )
     assert rules_bot().select_move(obs) == "QS"
 
 
-def test_forced_win_avoids_queen_of_spades() -> None:
-    obs = make_obs(["QS", "KS", "5C"], ["QS", "KS"], [("P3", "2S")])
-    # Not last (trick has 1 of 4 cards): play low, but never the queen if avoidable.
+def test_forced_win_avoids_penalty_card() -> None:
+    obs = make_obs(
+        ["QS", "KS", "5C"], ["QS", "KS"], [("P3", "2S")], contract=GameContract.NO_QUEENS
+    )
+    # Not last (1 of 4 cards on the table): play the harmless card.
     assert rules_bot().select_move(obs) == "KS"
 
 
 def test_forced_win_as_last_player_sheds_highest() -> None:
     obs = make_obs(
-        ["8D", "KD", "5C"],
-        ["8D", "KD"],
-        [("P1", "2D"), ("P2", "3D"), ("P3", "4D")],
+        ["8D", "KD", "5C"], ["8D", "KD"], [("P1", "2D"), ("P2", "3D"), ("P3", "4D")]
     )
     assert rules_bot().select_move(obs) == "KD"
 
 
-def test_void_dumps_queen_of_spades_first() -> None:
-    obs = make_obs(["QS", "AH", "9D"], ["QS", "AH", "9D"], [("P3", "7C")], hearts_broken=True)
-    assert rules_bot().select_move(obs) == "QS"
+@pytest.mark.parametrize(
+    ("contract", "hand", "expected"),
+    [
+        (GameContract.NO_QUEENS, ["QS", "AH", "9D"], "QS"),
+        (GameContract.NO_HEARTS, ["2H", "KH", "QS"], "KH"),
+        (GameContract.NO_MEN, ["QS", "JD", "AH"], "JD"),
+        (GameContract.NO_KING_OF_HEARTS, ["KH", "AS", "9D"], "KH"),
+        (GameContract.NO_TRICKS, ["2S", "AS", "9D"], "AS"),
+    ],
+)
+def test_void_dumps_the_costliest_card(
+    contract: GameContract, hand: list[str], expected: str
+) -> None:
+    obs = make_obs(hand, hand, [("P3", "7C")], contract=contract)
+    assert rules_bot().select_move(obs) == expected
 
 
-def test_void_dumps_highest_heart_without_queen() -> None:
-    obs = make_obs(["2H", "KH", "9D"], ["2H", "KH", "9D"], [("P3", "7C")], hearts_broken=True)
-    assert rules_bot().select_move(obs) == "KH"
-
-
-def test_void_dumps_dangerous_high_spade_while_queen_is_out() -> None:
-    obs = make_obs(["AS", "3H", "9D"], ["AS", "3H", "9D"], [("P3", "7C")], hearts_broken=True)
-    assert rules_bot().select_move(obs) == "AS"
-
-
-def test_lead_prefers_low_card_of_longest_plain_suit() -> None:
-    hand = ["4C", "9C", "3D", "5D", "KD", "TD", "2S", "AH"]
-    obs = make_obs(hand, hand, hearts_broken=True)
+def test_lead_prefers_lowest_card_and_longer_suit_on_ties() -> None:
+    hand = ["3C", "3D", "5D", "KD"]
+    obs = make_obs(hand, hand)
     assert rules_bot().select_move(obs) == "3D"
 
 
-def test_lead_avoids_hearts_and_high_spades_when_alternatives_exist() -> None:
-    hand = ["AS", "KS", "2H", "6C"]
-    obs = make_obs(hand, hand, hearts_broken=True)
+def test_lead_avoids_penalty_cards_when_alternatives_exist() -> None:
+    hand = ["2H", "AS", "6C"]
+    obs = make_obs(hand, hand, contract=GameContract.NO_HEARTS)
     assert rules_bot().select_move(obs) == "6C"
 
 
-def test_lead_uses_low_spade_before_hearts() -> None:
-    hand = ["4S", "AS", "2H"]
-    obs = make_obs(hand, hand, hearts_broken=True)
-    assert rules_bot().select_move(obs) == "4S"
-
-
-def test_lead_with_only_dangerous_cards_plays_lowest_heart() -> None:
-    hand = ["QS", "AS", "3H", "KH"]
-    obs = make_obs(hand, hand, hearts_broken=True)
+def test_lead_with_only_penalty_cards_plays_lowest() -> None:
+    hand = ["3H", "KH"]
+    obs = make_obs(hand, hand, contract=GameContract.NO_HEARTS)
     assert rules_bot().select_move(obs) == "3H"
 
 
 # ------------------------------------------------------- hidden-state model
 
 
-def _midgame_observation(seed: int, plays: int) -> tuple[HeartsGameEngine, PlayerObservation]:
-    engine = HeartsGameEngine(4, seed=seed)
+def _midgame_observation(seed: int, plays: int, players: int = 4) -> tuple[GameState, PlayerObservation]:
+    state = GameState.new(players, seed=seed)
+    state.auto_advance = False
     rng = random.Random(seed)
     for _ in range(plays):
-        pid = engine.current_player
+        pid = state.current_player
         assert pid is not None
-        engine.play_card(pid, rng.choice(engine.get_legal_moves(pid)))
-    pid = engine.current_player
+        state.play_card(pid, rng.choice(state.get_legal_moves(pid)))
+    pid = state.current_player
     assert pid is not None
-    return engine, engine.get_player_observation(pid)
+    return state, state.get_player_observation(pid)
 
 
 def test_context_unknown_cards_exclude_hand_and_played() -> None:
     _, obs = _midgame_observation(seed=3, plays=23)
     ctx = _build_context(obs)
     assert ctx is not None
-    played = {Card.parse(c) for _, c in obs.current_trick}
+    played = {Card.parse(c) for _, c in obs.played_cards}
     assert not set(ctx.unknown) & set(ctx.hand)
     assert not set(ctx.unknown) & played
     assert len(ctx.unknown) == sum(ctx.capacities.values())
     assert len(ctx.unknown) + len(ctx.hand) + 23 == 52
 
 
+def test_context_for_three_players_uses_51_card_deck() -> None:
+    _, obs = _midgame_observation(seed=2, plays=10, players=3)
+    ctx = _build_context(obs)
+    assert ctx is not None
+    assert Card.parse("2C") not in ctx.unknown
+    assert len(ctx.unknown) + len(ctx.hand) + 10 == 51
+
+
 def test_sampled_worlds_match_hand_sizes_and_voids() -> None:
     for seed in range(10):
-        engine, obs = _midgame_observation(seed=seed, plays=30)
+        state, obs = _midgame_observation(seed=seed, plays=30)
         ctx = _build_context(obs)
         assert ctx is not None
         rng = random.Random(seed)
@@ -190,8 +192,8 @@ def test_sampled_worlds_match_hand_sizes_and_voids() -> None:
             for pid, cards in world.items():
                 assert len(cards) == ctx.capacities[pid]
                 assert not any(c.suit in ctx.voids[pid] for c in cards)
-                # The real hidden hand is one of the possible worlds' constraints.
-                real = [Card.parse(c) for c in engine.get_player_observation(pid).hand]
+                # The real hidden hand respects the exposed voids too.
+                real = [Card.parse(c) for c in state.get_player_observation(pid).hand]
                 assert not any(c.suit in ctx.voids[pid] for c in real)
 
 
@@ -204,19 +206,26 @@ def test_inconsistent_observation_falls_back_to_heuristics() -> None:
 # --------------------------------------------------------------- full games
 
 
-def test_smart_bots_play_full_legal_deal() -> None:
-    engine = HeartsGameEngine(4, seed=11)
-    bots = {pid: SmartHeartsBot(num_samples=6, seed=i) for i, pid in enumerate(engine.player_ids)}
-    scores = play_deal(engine, bots)
-    assert sum(scores.values()) in {26, 78}
+@pytest.mark.parametrize("contract", list(GameContract))
+def test_smart_bots_play_full_legal_deal_in_every_contract(contract: GameContract) -> None:
+    start_deal = CONTRACT_ORDER.index(contract) * 4 + 1
+    state = GameState.new(4, seed=11, start_deal=start_deal)
+    bots = {pid: SmartHeartsBot(num_samples=2, seed=i) for i, pid in enumerate(state.player_ids)}
+    scores = play_deal(state, bots)
+    assert state.current_contract is contract
+    assert sum(scores.values()) == contract_total_penalty(contract, 4)
 
 
-def test_other_player_counts_work() -> None:
-    for n in (2, 3, 5):
-        engine = HeartsGameEngine(n, seed=n)
-        bots = {pid: SmartHeartsBot(num_samples=3, seed=i) for i, pid in enumerate(engine.player_ids)}
-        scores = play_deal(engine, bots)
-        assert set(scores) == set(engine.player_ids)
+@pytest.mark.parametrize("players", [3, 4])
+def test_rule_bots_play_a_whole_match(players: int) -> None:
+    state = GameState.new(players, seed=7)
+    bots = {pid: SmartHeartsBot(num_samples=0) for pid in state.player_ids}
+    while not state.is_over:
+        play_deal(state, bots)
+        if not state.is_over:
+            state.start_next_deal()
+    expected = sum(contract_total_penalty(c, players) for c in CONTRACT_ORDER for _ in range(players))
+    assert sum(state.total_scores.values()) == expected
 
 
 def test_same_seed_gives_same_decision() -> None:
@@ -228,17 +237,19 @@ def test_same_seed_gives_same_decision() -> None:
 
 
 def test_smart_bot_beats_random_players() -> None:
-    smart_total = 0
-    random_total = 0
-    deals = 12
-    for seed in range(deals):
-        engine = HeartsGameEngine(4, seed=seed)
-        rng = random.Random(seed)
-        controllers: dict[str, PlayerController] = {
-            pid: RandomBot(rng) for pid in engine.player_ids
-        }
-        controllers["P0"] = SmartHeartsBot(num_samples=8, seed=seed)
-        scores = play_deal(engine, controllers)
-        smart_total += scores["P0"]
-        random_total += sum(v for p, v in scores.items() if p != "P0") / 3
+    smart_total = 0.0
+    random_total = 0.0
+    deals = 0
+    for contract in CONTRACT_ORDER:
+        for seed in range(2):
+            state = GameState.new(4, seed=seed, start_deal=CONTRACT_ORDER.index(contract) * 4 + 1)
+            rng = random.Random(seed)
+            controllers: dict[str, PlayerController] = {
+                pid: RandomBot(rng) for pid in state.player_ids
+            }
+            controllers["P0"] = SmartHeartsBot(num_samples=6, seed=seed)
+            scores = play_deal(state, controllers)
+            smart_total += scores["P0"]
+            random_total += sum(v for p, v in scores.items() if p != "P0") / 3
+            deals += 1
     assert smart_total / deals < random_total / deals

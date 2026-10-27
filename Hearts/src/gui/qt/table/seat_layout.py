@@ -1,4 +1,4 @@
-"""Table geometry for 2-5 players in scene units (pure maths, no Qt).
+"""Table geometry for 3-4 players in scene units (pure maths, no Qt).
 
 Seats are placed on an ellipse. Slot 0 is the bottom seat (the viewer); the next
 players follow clockwise on screen: left, top, right.
@@ -25,10 +25,8 @@ TRICK_SPREAD = 0.37  # trick slots sit this fraction of the way from the centre 
 
 # angle (degrees, clockwise from the bottom) of each slot
 _ANGLES: dict[int, tuple[float, ...]] = {
-    2: (0, 180),
     3: (0, 120, 240),
     4: (0, 90, 180, 270),
-    5: (0, 72, 144, 216, 288),
 }
 
 
@@ -72,7 +70,7 @@ def hand_spec(slot: int, num_players: int) -> HandSpec:
     if y < CENTER[1] - 40:  # upper seats: a row of smaller cards, plate above it
         height = CARD_H * OTHER_SCALE
         y += 14
-        return HandSpec("row", x, y, OTHER_SCALE, 320.0 if num_players > 2 else 560.0,
+        return HandSpec("row", x, y, OTHER_SCALE, 320.0,
                         (x, y - height / 2 - 22))
     # side seats: a column, plate above it
     return HandSpec("column", x, y + 10, OTHER_SCALE, 400.0, (x, y + 10 - 400.0 / 2 - 26))

@@ -17,7 +17,8 @@ from enum import Enum
 from typing import Any
 
 from controllers.base import PlayerController
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.observation import PlayerObservation
+from engine.state import GameState
 from gui.core.controllers_factory import build_controller
 from gui.core.events import (
     BotUnavailable,
@@ -45,7 +46,7 @@ from utils.icl_logger import ICLLogger
 log = logging.getLogger(__name__)
 
 EventSink = Callable[[GameEvent], None]
-EngineFactory = Callable[[int, int], HeartsGameEngine]  # (num_players, deal index from 0)
+EngineFactory = Callable[[int], GameState]  # num_players -> a fresh match
 
 
 class ErrorResolution(Enum):
@@ -90,7 +91,7 @@ class GameRunner:
             dict(controllers)
             if controllers is not None
             else {
-                pid: build_controller(seat, pid, index, trajectories_path=config.log_path)
+                pid: build_controller(seat, pid, index)
                 for index, (pid, seat) in enumerate(
                     zip(config.player_ids, config.seats, strict=True)
                 )
@@ -134,9 +135,8 @@ class GameRunner:
 
     # ------------------------------------------------------------------ run
 
-    def _default_engine(self, num_players: int, deal_index: int) -> HeartsGameEngine:
-        seed = None if self.config.seed is None else self.config.seed + deal_index
-        return HeartsGameEngine(num_players, seed=seed)
+    def _default_engine(self, num_players: int) -> GameState:
+        return GameState.new(num_players, seed=self.config.seed)
 
     def _emit(self, event: GameEvent) -> None:
         self._sink(event)
@@ -149,6 +149,8 @@ class GameRunner:
         stats = SessionStats(cfg.player_ids)
         aborted = False
         try:
+            engine = self._engine_factory(cfg.num_players)
+            engine.auto_advance = False  # the finished deal stays on the table until we move on
             self._emit(
                 SessionStarted(
                     player_ids=cfg.player_ids,
@@ -156,13 +158,13 @@ class GameRunner:
                         pid: self._seat_label(pid, seat)
                         for pid, seat in zip(cfg.player_ids, cfg.seats, strict=True)
                     },
-                    total_deals=cfg.deals,
+                    total_deals=engine.total_deals,
                 )
             )
-            for deal in range(1, cfg.deals + 1):
-                engine = self._engine_factory(cfg.num_players, deal - 1)
+            while True:
+                deal = engine.deal_number
                 self._emit(
-                    DealStarted(deal, cfg.deals, snapshot_from_engine(engine, deal))
+                    DealStarted(deal, engine.total_deals, snapshot_from_engine(engine, deal))
                 )
                 scores = self._play_deal(engine, deal)
                 if scores is None:
@@ -173,22 +175,25 @@ class GameRunner:
                     DealFinished(
                         deal_number=deal,
                         scores=scores,
-                        shot_the_moon=engine.shot_the_moon,
+                        contract=engine.current_contract,
+                        declarer=engine.declarer,
                         totals=dict(stats.totals),
                         wins=dict(stats.wins),
                         ties=stats.ties,
                     )
                 )
-                if deal < cfg.deals:
-                    if cfg.has_human:
-                        # Show the result until the player presses "resume" (next deal).
-                        self.pace.pause()
-                        proceed = self.pace.gate_before() is not None
-                    else:
-                        proceed = self.pace.trick_hold()
-                    if not proceed:
-                        aborted = True
-                        break
+                if engine.is_over:
+                    break
+                if cfg.has_human:
+                    # Show the result until the player presses "resume" (next deal).
+                    self.pace.pause()
+                    proceed = self.pace.gate_before() is not None
+                else:
+                    proceed = self.pace.trick_hold()
+                if not proceed:
+                    aborted = True
+                    break
+                engine.start_next_deal()
         except Exception as exc:  # the UI must learn about a crashed thread
             log.exception("Runner crashed")
             aborted = True
@@ -205,14 +210,14 @@ class GameRunner:
                 )
             )
 
-    def _play_deal(self, engine: HeartsGameEngine, deal: int) -> dict[str, int] | None:
+    def _play_deal(self, engine: GameState, deal: int) -> dict[str, int] | None:
         """Play one deal. ``None`` when aborted."""
         pace = self.pace
         tricks: list[tuple[str, ...]] = []
         move_number = 0
         last_move_at = time.monotonic()
 
-        while not engine.is_over:
+        while not (engine.deal_finished or engine.is_over):
             if pace.aborted:
                 return None
             pid = engine.current_player
@@ -273,15 +278,13 @@ class GameRunner:
                         snapshot=snapshot,
                     )
                 )
-                if not result.hand_over:
+                if not result.deal_over:
                     pace.after_trick()
                 if not pace.trick_hold():  # the last trick stays visible too
                     return None
                 last_move_at = time.monotonic()
 
-        scores = engine.final_scores
-        assert scores is not None
-        return scores
+        return dict(engine.scores)
 
     # ---------------------------------------------------------------- helpers
 
@@ -310,9 +313,7 @@ class GameRunner:
                     replacement = SeatConfig(
                         SeatKind.SMART, smart_samples=self.config.seats[index].smart_samples
                     )
-                    self._controllers[pid] = build_controller(
-                        replacement, pid, index, trajectories_path=self.config.log_path
-                    )
+                    self._controllers[pid] = build_controller(replacement, pid, index)
                     self._emit(Notice(f"{pid}: zastąpiony przez SmartHeartsBot."))
 
     def _api_gave_up(self, pid: str, controller: PlayerController) -> bool:

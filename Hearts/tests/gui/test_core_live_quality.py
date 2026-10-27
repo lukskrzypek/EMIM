@@ -9,7 +9,9 @@ import pytest
 from collector import Collector
 from controllers.base import PlayerController
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.contracts import GameContract
+from engine.observation import PlayerObservation
+from engine.state import GameState
 from evaluation.report import build_report
 from evaluation.trajectories import load_moves
 from gui.core.events import MovePlayed, SessionFinished, TurnStarted
@@ -37,14 +39,17 @@ class LastLegal(PlayerController):
         return observation.legal_moves[-1]
 
 
-def _play(players: int, seed: int, log: Path | None, deals: int = 1) -> tuple[Collector, GameRunner]:
+def _play(
+    players: int, seed: int, log: Path | None, start_deal: int | None = None
+) -> tuple[Collector, GameRunner]:
+    """Play from ``start_deal`` to the end of the match (default: only the last deal)."""
+    first = players * 7 if start_deal is None else start_deal
     controllers: dict[str, PlayerController] = {
         f"P{i}": (LastLegal() if i == 0 else SmartHeartsBot(num_samples=0, seed=i))
         for i in range(players)
     }
     config = SessionConfig(
         tuple(SeatConfig(SeatKind.SMART, smart_samples=0) for _ in range(players)),
-        deals=deals,
         log_path=log,
     )
     sink = Collector()
@@ -54,7 +59,7 @@ def _play(players: int, seed: int, log: Path | None, deals: int = 1) -> tuple[Co
         pace=PaceControl(0),
         controllers=controllers,
         analyzer=LiveEvaluator(),
-        engine_factory=lambda n, k: HeartsGameEngine(n, seed=seed + k),
+        engine_factory=lambda n: GameState.new(n, seed=seed, start_deal=first),
     )
     runner.start()
     sink.wait_finished(timeout=30)
@@ -68,10 +73,11 @@ def test_engine_code_normalisation() -> None:
     assert to_engine_code("Ad") == "AD"
 
 
-@pytest.mark.parametrize("players", [2, 3, 4, 5])
+@pytest.mark.parametrize("players", [3, 4])
 def test_live_numbers_equal_the_offline_report(tmp_path: Path, players: int) -> None:
     log = tmp_path / "trajectories.jsonl"
-    sink, _ = _play(players, seed=11, log=log, deals=2)
+    # Last deal of NO_7TH_AND_LAST, then the first of ROBBER: two different contracts.
+    sink, _ = _play(players, seed=11, log=log, start_deal=players * 6)
 
     labels = {f"P{i}": f"seat {i}" for i in range(players)}
     live = LiveQuality(labels)
@@ -148,8 +154,9 @@ def test_hint_is_only_for_the_player_to_move() -> None:
 
 def test_disabled_evaluator_is_silent_and_cheap() -> None:
     evaluator = LiveEvaluator()
-    engine = HeartsGameEngine(3, seed=2)
+    engine = GameState.new(3, seed=2)
     pid = engine.current_player
+    assert pid is not None
     obs = engine.get_player_observation(pid)
     data = AnalysisInput(1, obs, (), obs.legal_moves[0], "x")
     assert evaluator(data) is not None
@@ -166,6 +173,7 @@ def test_invalid_position_gives_none() -> None:
             history=[],
             current_trick=[],
             num_players=4,
+            contract=GameContract.NO_TRICKS,
             legal_moves=["2C"],
         )
         is None
@@ -199,6 +207,6 @@ def test_aggregator_bookkeeping() -> None:
 
 
 def test_session_finishes_with_every_move_analysed() -> None:
-    sink, _ = _play(5, seed=2, log=None)
+    sink, _ = _play(4, seed=2, log=None)
     assert not sink.of(SessionFinished)[0].aborted
     assert all(e.analysis is not None for e in sink.of(MovePlayed))

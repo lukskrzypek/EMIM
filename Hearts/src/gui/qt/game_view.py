@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from utils.contract_text import contract_label
 from gui.core.events import (
     BotUnavailable,
     ControllerError,
@@ -280,7 +281,8 @@ class GameView(QWidget):
             snap = event.snapshot
             actor = "twój ruch" if event.is_human else "myśli"
             self.status.setText(
-                f"Rozdanie {snap.deal_number} · lewa {snap.trick_number} · {actor}: {event.player_id}"
+                f"Rozdanie {snap.deal_number}/{snap.total_deals} · {contract_label(snap.contract)} · "
+                f"lewa {snap.trick_number}/{snap.total_tricks} · {actor}: {event.player_id}"
             )
         elif isinstance(event, MovePlayed):
             self.scoreboard.show_scores(event.snapshot.points, event.snapshot.current_player)

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from utils.contract_text import contract_label
 from gui.core.events import DealFinished, SessionFinished
 
 
@@ -114,18 +115,17 @@ class ResultOverlay(QFrame):
         """``can_continue``: more deals follow and a human presses the button; ``waiting``: bots continue alone."""
         self._reset()
         self._layout.addWidget(self._title(f"Koniec rozdania {result.deal_number}"))
-        if result.shot_the_moon:
-            moon = QLabel(f"{result.shot_the_moon} zebrał wszystkie punkty (shooting the moon)!")
-            moon.setStyleSheet("color: #f5b942; background: transparent;")
-            moon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._layout.addWidget(moon)
+        subtitle = QLabel(f"{contract_label(result.contract)} · rozdawał {result.declarer}")
+        subtitle.setObjectName("muted")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._layout.addWidget(subtitle)
         best = min(result.scores.values())
         rows = [
             (f"{pid} · {labels.get(pid, '')}", str(result.scores[pid]), str(result.totals[pid]), str(result.wins[pid]))
             for pid in result.scores
         ]
         winners = {f"{pid} · {labels.get(pid, '')}" for pid, pts in result.scores.items() if pts == best}
-        self._layout.addLayout(self._grid(("Gracz", "Rozdanie", "Suma", "Wygrane"), rows, winners))
+        self._layout.addLayout(self._grid(("Gracz", "Kary", "Suma", "Wygrane"), rows, winners))
         if can_continue:
             button = QPushButton("Następne rozdanie")
             button.setObjectName("primary")

@@ -12,7 +12,8 @@ from controllers.base import PlayerController
 from controllers.ai_bot import AIBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.observation import PlayerObservation
+from engine.state import GameState
 from evaluation.report import evaluate_log, format_report
 from evaluation.trajectories import UNKNOWN_MODEL, load_moves
 from utils.icl_logger import ICLLogger
@@ -33,14 +34,30 @@ class _FirstLegal(PlayerController):
         return observation.legal_moves[0]
 
 
+def _play_deal(
+    state: GameState, controllers: dict[str, PlayerController], logger: ICLLogger
+) -> None:
+    """Play and log the current deal only (the log gets one deal's worth of records)."""
+    state.auto_advance = False
+    while not (state.deal_finished or state.is_over):
+        pid = state.current_player
+        assert pid is not None
+        observation = state.get_player_observation(pid)
+        controller = controllers[pid]
+        chosen = controller.select_move(observation)
+        logger.log(observation, chosen, controller.last_reasoning, controller.model_name)
+        state.play_card(pid, chosen)
+
+
 def _play(path: Path, players: int, names: list[str], deals: int = 1, seed: int = 0) -> None:
+    """Log ``deals`` deals; deal ``k`` uses the k-th contract of the King order."""
     logger = ICLLogger(path)
     controllers: dict[str, PlayerController] = {
         f"P{i}": _Labelled(name, seed + i) for i, name in enumerate(names)
     }
     for deal in range(deals):
-        engine = HeartsGameEngine(players, seed=seed + deal)
-        main.play_deal(engine, controllers, logger, show_play=False)
+        state = GameState.new(players, seed=seed + deal, start_deal=deal * players + 1)
+        _play_deal(state, controllers, logger)
 
 
 def _records(path: Path) -> list[dict[str, object]]:
@@ -59,8 +76,8 @@ def test_controllers_name_themselves() -> None:
 
 def test_logger_writes_model_field(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    engine = HeartsGameEngine(2, seed=1)
-    obs = engine.get_player_observation("P0")
+    state = GameState.new(4, seed=1)
+    obs = state.get_player_observation("P0")
     ICLLogger(path).log(obs, obs.legal_moves[0], "why", "some-model")
     ICLLogger(path).log(obs, obs.legal_moves[0])
     first, second = _records(path)
@@ -68,23 +85,27 @@ def test_logger_writes_model_field(tmp_path: Path) -> None:
     assert second["model"] == "unknown"
 
 
-def test_play_deal_logs_the_model_of_the_seat(tmp_path: Path) -> None:
+def test_play_match_logs_the_model_of_the_seat(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    engine = HeartsGameEngine(2, seed=2)
-    controllers = {"P0": _FirstLegal(), "P1": SmartHeartsBot(num_samples=0, seed=0)}
-    main.play_deal(engine, controllers, ICLLogger(path), show_play=False)
+    state = GameState.new(3, seed=2)
+    controllers: dict[str, PlayerController] = {
+        "P0": _FirstLegal(),
+        "P1": SmartHeartsBot(num_samples=0, seed=0),
+        "P2": SmartHeartsBot(num_samples=0, seed=1),
+    }
+    main.play_match(state, controllers, ICLLogger(path), show_play=False)
     seen = {(r["player_id"], r["model"]) for r in _records(path)}
-    assert seen == {("P0", "dummy-llm"), ("P1", "smart_bot")}
+    assert seen == {("P0", "dummy-llm"), ("P1", "smart_bot"), ("P2", "smart_bot")}
 
 
 # ---------------------------------------------------------------- log parsing
 
-@pytest.mark.parametrize("players", [2, 3, 4, 5])
+@pytest.mark.parametrize("players", [3, 4])
 def test_every_logged_move_is_reconstructed_and_rated(tmp_path: Path, players: int) -> None:
     path = tmp_path / "t.jsonl"
     _play(path, players, [f"m{i}" for i in range(players)], deals=3)
     loaded = load_moves(path)
-    cards = (52 - {2: 0, 3: 1, 4: 0, 5: 2}[players]) * 3
+    cards = (52 - {3: 1, 4: 0}[players]) * 3
     assert loaded.records == cards
     assert len(loaded.moves) == cards
     assert not loaded.skipped
@@ -106,7 +127,7 @@ def test_history_is_rebuilt_beyond_the_eight_tricks_shown_in_the_prompt(tmp_path
 
 def test_records_without_model_field_are_unknown(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    _play(path, 2, ["a", "b"])
+    _play(path, 3, ["a", "b", "c"])
     stripped = []
     for record in _records(path):
         record.pop("model")
@@ -119,7 +140,7 @@ def test_records_without_model_field_are_unknown(tmp_path: Path) -> None:
 
 def test_damaged_deal_is_skipped_and_next_deal_still_counts(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    _play(path, 2, ["a", "b"], deals=2)
+    _play(path, 3, ["a", "b", "c"], deals=2)
     lines = path.read_text(encoding="utf-8").splitlines()
     per_deal = len(lines) // 2
     broken = lines[:10] + ["{not json"] + lines[11:per_deal] + lines[per_deal:]
@@ -133,7 +154,7 @@ def test_damaged_deal_is_skipped_and_next_deal_still_counts(tmp_path: Path) -> N
 
 def test_interrupted_deal_does_not_break_the_next_one(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    _play(path, 2, ["a", "b"], deals=2, seed=4)
+    _play(path, 3, ["a", "b", "c"], deals=2, seed=4)
     lines = path.read_text(encoding="utf-8").splitlines()
     per_deal = len(lines) // 2
     path.write_text("\n".join(lines[:7] + lines[per_deal:]) + "\n", encoding="utf-8")
@@ -158,9 +179,9 @@ def test_ignored_players_are_left_out(tmp_path: Path) -> None:
 
 def test_ignore_filter_is_case_insensitive_and_optional(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    _play(path, 2, ["Human", "llm"])
-    assert set(evaluate_log(path, ("human",)).models) == {"llm"}
-    assert set(evaluate_log(path, ()).models) == {"Human", "llm"}
+    _play(path, 3, ["Human", "llm", "llm2"])
+    assert set(evaluate_log(path, ("human",)).models) == {"llm", "llm2"}
+    assert set(evaluate_log(path, ()).models) == {"Human", "llm", "llm2"}
 
 
 def test_default_ignore_list_covers_human_and_smart_bot() -> None:
@@ -185,14 +206,14 @@ def test_better_play_scores_higher_than_always_first_legal_card(tmp_path: Path) 
     path = tmp_path / "t.jsonl"
     logger = ICLLogger(path)
     for seed in range(12):
-        engine = HeartsGameEngine(4, seed=seed)
+        state = GameState.new(4, seed=seed, start_deal=(seed % 7) * 4 + 1)
         controllers: dict[str, PlayerController] = {
             "P0": SmartHeartsBot(num_samples=0, seed=seed),
             "P1": _FirstLegal(),
             "P2": SmartHeartsBot(num_samples=0, seed=seed + 1),
             "P3": _FirstLegal(),
         }
-        main.play_deal(engine, controllers, logger, show_play=False)
+        _play_deal(state, controllers, logger)
     report = evaluate_log(path)
     smart = report.models["smart_bot"].correctness
     naive = report.models["dummy-llm"].correctness
@@ -202,7 +223,7 @@ def test_better_play_scores_higher_than_always_first_legal_card(tmp_path: Path) 
 
 def test_empty_selection_reports_no_moves(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    _play(path, 2, ["human", "smart_bot"])
+    _play(path, 3, ["human", "smart_bot", "smart_bot"])
     text = format_report(evaluate_log(path, ("human", "smart_bot")))
     assert "Brak ruchów do oceny" in text
 
@@ -210,7 +231,7 @@ def test_empty_selection_reports_no_moves(tmp_path: Path) -> None:
 # ------------------------------------------------------------ 0-player mode
 
 def test_ask_players_accepts_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    answers = iter(["7", "0"])
+    answers = iter(["7", "2", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     assert main._ask_players() == 0
 
@@ -232,13 +253,13 @@ def test_nonzero_players_still_start_a_game(monkeypatch: pytest.MonkeyPatch) -> 
         started.append(players)
         return players, {f"P{i}": SmartHeartsBot(num_samples=0, seed=i) for i in range(players)}, 1, False
 
-    monkeypatch.setattr("builtins.input", lambda _: "2")
+    monkeypatch.setattr("builtins.input", lambda _: "3")
     monkeypatch.setattr(main, "setup_match", fake_setup)
     monkeypatch.setattr(main, "run_quality_report", lambda: pytest.fail("report instead of game"))
     monkeypatch.setattr(main, "LOG_PATH", Path("unused.jsonl"))
     monkeypatch.setattr(main, "ICLLogger", lambda _path: _NullLogger())
     main.main()
-    assert started == [2]
+    assert started == [3]
 
 
 class _NullLogger(ICLLogger):

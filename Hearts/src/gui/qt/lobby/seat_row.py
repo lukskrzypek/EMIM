@@ -112,7 +112,7 @@ class SeatRow(QWidget):
         self.guidelines.setMaxLength(GUIDELINES_MAX_CHARS)
         self.guidelines.setPlaceholderText(
             f"domyślnie: {USER_GUIDELINES}" if USER_GUIDELINES.strip()
-            else "np. Avoid taking hearts; dump the Queen of Spades early."
+            else "np. Avoid taking tricks early; dump high cards when void."
         )
         self.guidelines.setToolTip(
             "Dodatkowa instrukcja dopisywana do promptu systemowego bota. "

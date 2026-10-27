@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import random
-
 import pytest
 
-from engine.models import Card, Deck, Rank, Suit
+from engine.models import Card, Rank, Suit, king_deck, king_hand_size
 
 RANK_SYMBOLS = "23456789TJQKA"
 SUIT_SYMBOLS = "CDSH"
@@ -83,53 +81,25 @@ def test_card_equality_and_hash() -> None:
 
 @pytest.mark.parametrize(
     ("num_players", "removed", "hand_size"),
-    [
-        (2, set(), 26),
-        (3, {"2D"}, 17),
-        (4, set(), 13),
-        (5, {"2D", "2S"}, 10),
-    ],
+    [(3, {"2C"}, 17), (4, set(), 13)],
 )
-def test_deck_prepares_and_deals_for_player_count(
-    num_players: int,
-    removed: set[str],
-    hand_size: int,
-) -> None:
-    deck = Deck(num_players)
-    codes = [str(card) for card in deck.cards]
+def test_king_deck_per_player_count(num_players: int, removed: set[str], hand_size: int) -> None:
+    deck = king_deck(num_players)
+    codes = [str(card) for card in deck]
 
     assert len(codes) == num_players * hand_size
     assert len(set(codes)) == len(codes)
     assert set(codes) == set(ALL_CODES) - removed
-    assert list(deck.cards) == sorted(deck.cards)
-    assert deck.cards_per_player == hand_size
-    assert "2C" in codes
-
-    hands = deck.deal()
-    assert len(hands) == num_players
-    dealt = [card for hand in hands for card in hand]
-    assert [len(hand) for hand in hands] == [hand_size] * num_players
-    assert {str(card) for card in dealt} == set(codes)
-    assert len(dealt) == len({str(card) for card in dealt})
-    assert all(hand == sorted(hand) for hand in hands)
+    assert list(deck) == sorted(deck)
+    assert king_hand_size(num_players) == hand_size
 
 
-def test_deal_without_rng_is_deterministic() -> None:
-    assert Deck(4).deal() == Deck(4).deal()
-
-
-def test_deal_with_rng_is_reproducible_and_complete() -> None:
-    deck = Deck(5)
-    first = deck.deal(random.Random(0))
-    second = deck.deal(random.Random(0))
-    assert first == second
-    assert first != deck.deal()
-    dealt = [card for hand in first for card in hand]
-    assert sorted(dealt) == list(deck.cards)
-    assert list(deck.cards) == sorted(deck.cards)
-
-
-@pytest.mark.parametrize("num_players", [0, 1, 6, -1, 52])
-def test_deck_rejects_unsupported_player_count(num_players: int) -> None:
+@pytest.mark.parametrize("num_players", [0, 1, 2, 5, 6, -1, 52])
+def test_king_deck_rejects_unsupported_player_count(num_players: int) -> None:
     with pytest.raises(ValueError):
-        Deck(num_players)
+        king_deck(num_players)
+
+
+@pytest.mark.parametrize("value, rank", [(2, "2"), (10, "T"), (11, "J"), (14, "A")])
+def test_card_value(value: int, rank: str) -> None:
+    assert Card.parse(f"{rank}H").value == value

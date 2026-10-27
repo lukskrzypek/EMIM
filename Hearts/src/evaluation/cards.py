@@ -34,18 +34,16 @@ def parse_card(text: str) -> Card:
     return Card(rank, suit.lower())
 
 
-# Karty usuwane z talii, żeby rozdać po równo (SPEC.md, sekcja 2).
+# Karty usuwane z talii, żeby rozdać po równo (SPEC.md, sekcja 1): 3 graczy grają bez 2C.
 _REMOVED: dict[int, tuple[Card, ...]] = {
-    2: (),
-    3: (Card("2", "d"),),
+    3: (Card("2", "c"),),
     4: (),
-    5: (Card("2", "d"), Card("2", "s")),
 }
 SUPPORTED_PLAYER_COUNTS = tuple(_REMOVED)
 
 
 def full_deck(num_players: int = 4) -> list[Card]:
-    """Talia dla danej liczby graczy (2-5)."""
+    """Talia dla danej liczby graczy (3-4)."""
     if num_players not in _REMOVED:
         raise ValueError(f"Liczba graczy musi być jedną z {SUPPORTED_PLAYER_COUNTS}, jest {num_players}.")
     removed = set(_REMOVED[num_players])

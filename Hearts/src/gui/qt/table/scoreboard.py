@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.core.cardtext import pretty_card
+from utils.contract_text import contract_label
 from gui.core.events import (
     BotUnavailable,
     DealFinished,
@@ -97,7 +98,12 @@ class TrickLogWidget(QListWidget):
             self.labels = dict(event.seat_labels)
             self.add_line(f"Sesja: {event.total_deals} rozdań", muted=True)
         elif isinstance(event, DealStarted):
-            self.add_line(f"── Rozdanie {event.deal_number}/{event.total_deals} ──", muted=True)
+            contract = contract_label(event.snapshot.contract)
+            self.add_line(
+                f"── Rozdanie {event.deal_number}/{event.total_deals}: {contract}, "
+                f"rozdaje {event.snapshot.declarer} ──",
+                muted=True,
+            )
         elif isinstance(event, MovePlayed):
             who = f"{event.player_id} ({self.labels.get(event.player_id, '?')})"
             verdict = ""
@@ -110,13 +116,14 @@ class TrickLogWidget(QListWidget):
         elif isinstance(event, TrickCompleted):
             plays = "  ".join(f"{p}:{pretty_card(c)}" for p, c in event.cards)
             self.add_line(
-                f"   Lewa {event.trick_number}: {plays} → bierze {event.winner} (+{event.points})",
+                f"   Lewa {event.trick_number}: {plays} → bierze {event.winner} (+{event.points} pkt)",
                 muted=True,
             )
         elif isinstance(event, DealFinished):
             scores = "  ".join(f"{p}={s}" for p, s in event.scores.items())
-            moon = f"  Księżyc: {event.shot_the_moon}" if event.shot_the_moon else ""
-            self.add_line(f"Koniec rozdania {event.deal_number}: {scores}{moon}")
+            self.add_line(
+                f"Koniec rozdania {event.deal_number} ({contract_label(event.contract)}): {scores}"
+            )
         elif isinstance(event, SessionFinished):
             self.add_line("Przerwano" if event.aborted else "Koniec sesji")
         elif isinstance(event, Notice):

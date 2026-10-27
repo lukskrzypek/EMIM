@@ -7,7 +7,8 @@ from PySide6.QtGui import QImage
 
 from controllers.base import PlayerController
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.observation import PlayerObservation
+from engine.state import GameState
 from gui.core.events import MovePlayed, SessionFinished, SessionStarted
 from gui.core.human_controller import HumanGuiController
 from gui.core.live_evaluator import LiveEvaluator
@@ -37,7 +38,7 @@ class Talker(PlayerController):
 
 
 def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n, k: HeartsGameEngine(n, seed=seed + k)
+    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7)  # just the last deal
 
 
 def _distinct(widget) -> int:  # type: ignore[no-untyped-def]
@@ -197,12 +198,16 @@ def test_session_without_an_evaluator_still_runs(qtbot) -> None:  # type: ignore
 
 def test_hints_for_a_human_match_the_analysis_of_the_move(qtbot) -> None:  # type: ignore[no-untyped-def]
     config = SessionConfig(
-        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART, smart_samples=0)), log_path=None
+        (SeatConfig(SeatKind.HUMAN), *(SeatConfig(SeatKind.SMART, smart_samples=0),) * 2), log_path=None
     )
     human = HumanGuiController()
     session = SessionController(
         config,
-        controllers={"P0": human, "P1": SmartHeartsBot(num_samples=0, seed=1)},
+        controllers={
+            "P0": human,
+            "P1": SmartHeartsBot(num_samples=0, seed=1),
+            "P2": SmartHeartsBot(num_samples=0, seed=2),
+        },
         engine_factory=_factory(3),
         analyzer=LiveEvaluator(),
     )
@@ -236,10 +241,10 @@ def test_hints_for_a_human_match_the_analysis_of_the_move(qtbot) -> None:  # typ
 
 
 def test_hint_is_never_computed_behind_the_hot_seat_veil(qtbot) -> None:  # type: ignore[no-untyped-def]
-    config = SessionConfig((SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.HUMAN)), log_path=None)
+    config = SessionConfig((SeatConfig(SeatKind.HUMAN),) * 3, log_path=None)
     session = SessionController(
         config,
-        controllers={"P0": HumanGuiController(), "P1": HumanGuiController()},
+        controllers={f"P{i}": HumanGuiController() for i in range(3)},
         engine_factory=_factory(3),
         analyzer=LiveEvaluator(),
     )

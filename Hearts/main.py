@@ -1,4 +1,4 @@
-"""Kierki: liczba graczy, kontroler przy każdym miejscu, symulacja gdy nie ma człowieka."""
+"""Kierki polskie (King): liczba graczy, kontroler przy każdym miejscu, symulacja gdy nie ma człowieka."""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ from controllers.base import PlayerController
 from controllers.ai_bot import PROVIDERS, AIBot
 from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine
+from engine.state import GameState
 from evaluation.report import evaluate_log, format_report
+from utils.contract_text import contract_label
 from utils.icl_logger import ICLLogger
 
-PLAYER_COUNTS = (2, 3, 4, 5)
+PLAYER_COUNTS = (3, 4)
 QUALITY_MODE = 0  # entering 0 players runs the quality report instead of a game
 SAMPLES = 40
 LOG_PATH = ROOT / "logs" / "trajectories.jsonl"
@@ -33,41 +34,39 @@ CONTROLLER_CHOICES: tuple[tuple[str, str], ...] = (
 )
 
 
-def play_deal(
-    engine: HeartsGameEngine,
+def play_match(
+    state: GameState,
     controllers: Mapping[str, PlayerController],
     logger: ICLLogger,
     *,
     show_play: bool,
 ) -> dict[str, int]:
-    """Play one deal to the end. Scores already include shooting the moon."""
-    if show_play:
-        print("Ręce:")
-        for pid in engine.player_ids:
-            hand = " ".join(engine.get_player_observation(pid).hand)
-            print(f"  {pid}: {hand}")
-
-    while not engine.is_over:
-        player_id = engine.current_player
-        assert player_id is not None
-        observation = engine.get_player_observation(player_id)
-        if show_play and not observation.current_trick:
-            print()
-        chosen = controllers[player_id].select_move(observation)
-        if chosen not in observation.legal_moves:
-            raise ValueError(f"{player_id} chose illegal move {chosen!r}")
-        controller = controllers[player_id]
-        logger.log(observation, chosen, controller.last_reasoning, controller.model_name)
-        result = engine.play_card(player_id, chosen)
+    """Play a match to the end (every remaining deal). Returns the penalty totals."""
+    state.auto_advance = False  # keep a finished deal on the table until it is printed
+    while True:
         if show_play:
-            print(f"  {player_id}: {chosen}", flush=True)
-            if result.trick_completed:
-                history = engine.get_player_observation(player_id).trick_history[-1]
-                print(history)
-
-    scores = engine.final_scores
-    assert scores is not None
-    return scores
+            _show_deal_start(state)
+        while not (state.deal_finished or state.is_over):
+            player_id = state.current_player
+            assert player_id is not None
+            observation = state.get_player_observation(player_id)
+            if show_play and not observation.current_trick:
+                print()
+            controller = controllers[player_id]
+            chosen = controller.select_move(observation)
+            if chosen not in observation.legal_moves:
+                raise ValueError(f"{player_id} chose illegal move {chosen!r}")
+            logger.log(observation, chosen, controller.last_reasoning, controller.model_name)
+            result = state.play_card(player_id, chosen)
+            if show_play:
+                print(f"  {player_id}: {chosen}", flush=True)
+                if result.trick_completed:
+                    print(state.trick_history[-1].summary())
+        if show_play:
+            _show_deal_end(state)
+        if state.is_over:
+            return dict(state.total_scores)
+        state.start_next_deal()
 
 
 def play_session(
@@ -75,20 +74,22 @@ def play_session(
     controllers: Mapping[str, PlayerController],
     logger: ICLLogger,
     *,
-    deals: int,
+    matches: int,
     show_play: bool,
+    seed: int | None = None,
 ) -> dict[str, int]:
-    """Play ``deals`` independent deals and return summed scores."""
-    if deals < 1:
-        raise ValueError(f"Deal count must be positive, got {deals}")
+    """Play ``matches`` independent matches and return the summed penalties."""
+    if matches < 1:
+        raise ValueError(f"Match count must be positive, got {matches}")
     totals = {f"P{i}": 0 for i in range(num_players)}
     wins = dict(totals)
     ties = 0
-    for deal in range(1, deals + 1):
+    for number in range(1, matches + 1):
         if show_play:
-            print(f"\n=== Rozdanie {deal} ===")
-        engine = HeartsGameEngine(num_players)
-        scores = play_deal(engine, controllers, logger, show_play=show_play)
+            print(f"\n=== Partia {number} ===")
+        match_seed = None if seed is None else seed + number - 1
+        state = GameState.new(num_players, seed=match_seed)
+        scores = play_match(state, controllers, logger, show_play=show_play)
         for player_id, points in scores.items():
             totals[player_id] += points
         leaders = _leaders(scores)
@@ -96,14 +97,29 @@ def play_session(
             wins[leaders[0]] += 1
         else:
             ties += 1
-        if show_play or deals == 1:
-            _show_public(engine.shot_the_moon, scores, totals)
+        if show_play or matches == 1:
+            _show_public(scores, totals)
         else:
-            moon = f"  księżyc:{engine.shot_the_moon}" if engine.shot_the_moon else ""
-            print(f"Partia {deal}: {_format_scores(scores)}{moon}", flush=True)
-    if deals > 1 and not show_play:
-        _show_batch(totals, wins, ties, deals)
+            print(f"Partia {number}: {_format_scores(scores)}", flush=True)
+    if matches > 1 and not show_play:
+        _show_batch(totals, wins, ties, matches)
     return totals
+
+
+def _show_deal_start(state: GameState) -> None:
+    print(
+        f"\n--- Rozdanie {state.deal_number}/{state.total_deals}: "
+        f"{contract_label(state.current_contract)} (rozdaje {state.declarer}) ---"
+    )
+    print("Ręce:")
+    for pid in state.player_ids:
+        hand = " ".join(state.get_player_observation(pid).hand)
+        print(f"  {pid}: {hand}")
+
+
+def _show_deal_end(state: GameState) -> None:
+    print("\nKary w rozdaniu: " + _format_scores(state.scores))
+    print("Suma w partii:   " + _format_scores(state.total_scores))
 
 
 def _format_scores(scores: Mapping[str, int]) -> str:
@@ -115,15 +131,9 @@ def _leaders(scores: Mapping[str, int]) -> list[str]:
     return [pid for pid, pts in scores.items() if pts == best]
 
 
-def _show_public(
-    moon: str | None,
-    deal_scores: dict[str, int],
-    totals: dict[str, int],
-) -> None:
+def _show_public(scores: dict[str, int], totals: dict[str, int]) -> None:
     print("\n" + "=" * 64)
-    if moon is not None:
-        print(f"{moon} zebrał wszystkie 26 punktów (shooting the moon).")
-    print("Rozdanie: " + _format_scores(deal_scores))
+    print("Partia:   " + _format_scores(scores))
     print("Suma:     " + _format_scores(totals))
     print("Prowadzi: " + ", ".join(_leaders(totals)))
 
@@ -132,11 +142,11 @@ def _show_batch(
     totals: dict[str, int],
     wins: dict[str, int],
     ties: int,
-    deals: int,
+    matches: int,
 ) -> None:
     print("\n" + "=" * 64)
     print("Suma:     " + _format_scores(totals))
-    averages = "  ".join(f"{pid}={totals[pid] / deals:.1f}" for pid in totals)
+    averages = "  ".join(f"{pid}={totals[pid] / matches:.1f}" for pid in totals)
     print("Średnia:  " + averages)
     print("Wygrane:  " + _format_scores(wins) + f"  remisy={ties}")
     print("Prowadzi: " + ", ".join(_leaders(totals)))
@@ -174,7 +184,7 @@ def _ask_kind(player_id: str) -> str:
         print(f"Podaj numer od 1 do {len(CONTROLLER_CHOICES)}.")
 
 
-def _ask_deal_count() -> int:
+def _ask_match_count() -> int:
     while True:
         raw = input("Ile partii zasymulować? ").strip()
         if raw.isdigit() and int(raw) >= 1:
@@ -188,14 +198,14 @@ def _make_controller(kind: str, player_id: str, seat: int) -> PlayerController:
     if kind == "smart":
         return SmartHeartsBot(num_samples=SAMPLES, seed=seat)
     if kind in PROVIDERS:  # the choice key is the provider id
-        return AIBot(player_id, provider=kind, trajectories_path=LOG_PATH)
+        return AIBot(player_id, provider=kind)
     raise ValueError(f"Unknown controller: {kind!r}")
 
 
 def setup_match(
     num_players: int | None = None,
 ) -> tuple[int, dict[str, PlayerController], int, bool]:
-    """Ask for the table, then for a deal count when every seat is a bot."""
+    """Ask for the table, then for a match count when every seat is a bot."""
     if num_players is None:
         num_players = _ask_players()
     kinds = [_ask_kind(f"P{i}") for i in range(num_players)]
@@ -208,9 +218,9 @@ def setup_match(
         print(f"{player_id}: {labels[kind]}")
     if "human" in kinds:
         return num_players, controllers, 1, False
-    deals = _ask_deal_count()
-    print(f"Partii: {deals}")
-    return num_players, controllers, deals, deals == 1
+    matches = _ask_match_count()
+    print(f"Partii: {matches}")
+    return num_players, controllers, matches, matches == 1
 
 
 def main() -> None:
@@ -218,12 +228,12 @@ def main() -> None:
     if chosen_players == QUALITY_MODE:
         run_quality_report()
         return
-    num_players, controllers, deals, show_play = setup_match(chosen_players)
+    num_players, controllers, matches, show_play = setup_match(chosen_players)
     totals = play_session(
         num_players,
         controllers,
         ICLLogger(LOG_PATH),
-        deals=deals,
+        matches=matches,
         show_play=show_play,
     )
     best = min(totals.values())

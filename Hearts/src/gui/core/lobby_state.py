@@ -10,7 +10,6 @@ from gui.config import PLAYER_COUNTS, SMART_SAMPLES
 from gui.core.seat_config import SeatConfig, SeatKind, clean_guidelines, clean_name
 
 DEFAULT_PLAYERS = 4
-MAX_DEALS = 1000
 
 
 def default_seats(count: int = max(PLAYER_COUNTS)) -> tuple[SeatConfig, ...]:
@@ -22,14 +21,12 @@ def default_seats(count: int = max(PLAYER_COUNTS)) -> tuple[SeatConfig, ...]:
 @dataclass(frozen=True)
 class LobbyState:
     players: int = DEFAULT_PLAYERS
-    deals: int = 1
     seats: tuple[SeatConfig, ...] = field(default_factory=default_seats)  # always max(PLAYER_COUNTS)
 
     def to_json(self) -> str:
         return json.dumps(
             {
                 "players": self.players,
-                "deals": self.deals,
                 "seats": [
                     {
                         "kind": seat.kind.value,
@@ -55,12 +52,6 @@ class LobbyState:
         if not isinstance(data, dict):
             data = {}
 
-        def number(key: str, fallback: int, low: int, high: int) -> int:
-            value = data.get(key, fallback)
-            if isinstance(value, bool) or not isinstance(value, int):
-                return fallback
-            return max(low, min(high, value))
-
         players = data.get("players")
         seats = list(default.seats)
         raw_seats = data.get("seats")
@@ -69,7 +60,6 @@ class LobbyState:
                 seats[i] = _parse_seat(raw, seats[i])
         return cls(
             players=players if players in PLAYER_COUNTS else default.players,
-            deals=number("deals", default.deals, 1, MAX_DEALS),
             seats=tuple(seats),
         )
 

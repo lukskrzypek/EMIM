@@ -7,7 +7,8 @@ import time
 
 import pytest
 
-from engine.game import HeartsGameEngine
+from engine.contracts import GameContract
+from engine.state import GameState
 from gui.core.controllers_factory import availability_problem, build_controller
 from gui.core.human_controller import HumanGuiController, MoveCancelled
 from gui.core.pace import PaceControl
@@ -97,7 +98,7 @@ def test_after_trick_pauses_only_when_requested() -> None:
 
 
 def _observation():  # type: ignore[no-untyped-def]
-    engine = HeartsGameEngine(4, seed=1)
+    engine = GameState.new(4, seed=1)
     return engine.get_player_observation(engine.current_player)
 
 
@@ -154,11 +155,13 @@ def test_session_config_validation() -> None:
     with pytest.raises(ValueError):
         SessionConfig((seat,))
     with pytest.raises(ValueError):
-        SessionConfig((seat, seat), deals=0)
+        SessionConfig((seat, seat))  # King is played by 3 or 4
+    with pytest.raises(ValueError):
+        SessionConfig((seat,) * 5)
     config = SessionConfig((SeatConfig(SeatKind.HUMAN), seat, SeatConfig(SeatKind.HUMAN)))
     assert config.player_ids == ("P0", "P1", "P2")
     assert config.human_ids == ("P0", "P2") and config.has_human
-    assert not SessionConfig((seat, seat)).has_human
+    assert not SessionConfig((seat, seat, seat)).has_human
 
 
 def test_factory_builds_each_kind(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -168,7 +171,7 @@ def test_factory_builds_each_kind(tmp_path) -> None:  # type: ignore[no-untyped-
     assert isinstance(build_controller(SeatConfig(SeatKind.HUMAN), "P0", 0), HumanGuiController)
     assert isinstance(build_controller(SeatConfig(SeatKind.SMART), "P1", 1), SmartHeartsBot)
     ai_bot = build_controller(
-        SeatConfig(SeatKind.AI, ai_model="m/x"), "P2", 2, trajectories_path=None
+        SeatConfig(SeatKind.AI, ai_model="m/x"), "P2", 2
     )
     assert isinstance(ai_bot, AIBot) and ai_bot.player_id == "P2" and ai_bot.model == "m/x"
 
@@ -182,15 +185,15 @@ def test_one_ai_model_on_two_seats_needs_different_names() -> None:
     assert duplicate_ai_memories((a, b, c)) == ["openai/gpt-oss-20b"]  # one memory file for both
     SessionConfig((a, c, smart, smart))  # many SmartHeartsBots are fine
     with pytest.raises(ValueError, match="different names"):
-        SessionConfig((a, b))
+        SessionConfig((a, b, smart))
 
     named = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b", ai_name="bold")
     twin = SeatConfig(SeatKind.AI, ai_model="openai/gpt-oss-20b", ai_name="BOLD")
     assert duplicate_ai_memories((a, named)) == []  # one without a name, one with: fine
-    SessionConfig((a, named))
+    SessionConfig((a, named, smart))
     assert duplicate_ai_memories((named, twin)) == ["openai/gpt-oss-20b (bold)"]  # same file
     with pytest.raises(ValueError):
-        SessionConfig((named, twin))
+        SessionConfig((named, twin, smart))
 
 
 def test_seat_name_decides_the_memory_file(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -209,10 +212,10 @@ def test_seat_name_decides_the_memory_file(tmp_path, monkeypatch) -> None:  # ty
     assert clean_name("x" * 40) == "x" * 10 and clean_name("zażółć-1") == "zażółć-1"
 
     monkeypatch.setattr("controllers.ai_bot.DEFAULT_MEMORY_DIR", tmp_path)  # keep logs/ clean
-    bot = build_controller(named, "P0", 0, trajectories_path=None)  # the bot gets the name itself
+    bot = build_controller(named, "P0", 0)  # the bot gets the name itself
     assert bot.name == "bold" and bot.model_name == "openai/gpt-oss-120b_bold"
     assert bot._memory_path == tmp_path / "memory_openai_gpt-oss-120b_bold.txt"
-    assert build_controller(plain, "P1", 1, trajectories_path=None).model_name == "openai/gpt-oss-120b"
+    assert build_controller(plain, "P1", 1).model_name == "openai/gpt-oss-120b"
 
 
 def test_model_catalog_reads_a_file_and_falls_back(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -247,7 +250,7 @@ def test_each_provider_has_its_own_model_file_and_key_file() -> None:
 
 def test_factory_passes_the_provider_to_the_ai_bot() -> None:
     seat = SeatConfig(SeatKind.AI, ai_provider="openai", ai_model="gpt-4o-mini")
-    bot = build_controller(seat, "P1", 1, trajectories_path=None)
+    bot = build_controller(seat, "P1", 1)
     assert bot.provider == "openai" and bot.model == "gpt-4o-mini"
 
 
@@ -255,7 +258,7 @@ def test_factory_passes_guidelines_to_the_ai_bot() -> None:
     from controllers.ai_bot import USER_GUIDELINES
 
     def bot(**kw):  # type: ignore[no-untyped-def]
-        return build_controller(SeatConfig(SeatKind.AI, **kw), "P1", 1, trajectories_path=None)
+        return build_controller(SeatConfig(SeatKind.AI, **kw), "P1", 1)
 
     assert bot(ai_guidelines="  Take no hearts.  ")._guidelines == "Take no hearts."
     assert bot(ai_guidelines="")._guidelines == USER_GUIDELINES  # empty -> the bot's default
@@ -265,7 +268,7 @@ def test_factory_passes_guidelines_to_the_ai_bot() -> None:
 
 
 def _observation():  # type: ignore[no-untyped-def]
-    engine = HeartsGameEngine(3, seed=1)
+    engine = GameState.new(3, seed=1)
     return engine.get_player_observation(engine.current_player)
 
 
@@ -281,12 +284,13 @@ def test_availability_reports_a_missing_key(tmp_path) -> None:  # type: ignore[n
 
 
 def test_snapshot_exposes_all_hands_and_legal_moves() -> None:
-    engine = HeartsGameEngine(4, seed=1)
+    engine = GameState.new(4, seed=1)
     snap = snapshot_from_engine(engine, 1)
     assert set(snap.hands) == {"P0", "P1", "P2", "P3"}
     assert all(len(h) == 13 for h in snap.hands.values())
-    assert snap.current_player == engine.current_player and snap.legal_moves == ("2C",)
-    assert not snap.current_trick and not snap.game_over and snap.trick_number == 1
+    assert snap.current_player == engine.declarer and len(snap.legal_moves) == 13  # the declarer leads freely
+    assert snap.contract is GameContract.NO_TRICKS and snap.total_tricks == 13
+    assert not snap.current_trick and not snap.deal_over and snap.trick_number == 1
 
 
 # ------------------------------------------------------------ the pause stops the thinking clock

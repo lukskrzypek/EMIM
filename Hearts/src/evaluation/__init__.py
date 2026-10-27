@@ -6,9 +6,9 @@ from .evaluator import (
     evaluate_move,
 )
 from .params import Params
-from .rounds import RoundType
+from engine.contracts import GameContract
 
 __all__ = [
-    "GameState", "InvalidState", "MoveEvaluation", "Params", "RoundType",
+    "GameState", "InvalidState", "MoveEvaluation", "Params", "GameContract",
     "evaluate_all", "evaluate_move",
 ]

@@ -13,7 +13,9 @@ from PySide6.QtGui import QValidator
 
 from controllers.base import PlayerController
 from controllers.smart_bot import SmartHeartsBot
-from engine.game import HeartsGameEngine, PlayerObservation
+from engine.contracts import GameContract, contract_total_penalty
+from engine.observation import PlayerObservation
+from engine.state import GameState
 from gui.config import MAX_DELAY_S
 from gui.core.events import MovePlayed, SessionFinished
 from gui.core.game_runner import ErrorResolution
@@ -31,13 +33,14 @@ from gui.qt.session_controller import SessionController
 from gui.qt.table.card_item import CardItem
 
 
-def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n, k: HeartsGameEngine(n, seed=seed + k)
+def _factory(seed: int, deals: int = 1):  # type: ignore[no-untyped-def]
+    """A match that starts ``deals`` deals before the end (a full match is 21/28 deals)."""
+    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7 - deals + 1)
 
 
-def _smart_config(n: int = 3, deals: int = 1) -> SessionConfig:
+def _smart_config(n: int = 3) -> SessionConfig:
     seats = tuple(SeatConfig(SeatKind.SMART, smart_samples=0) for _ in range(n))
-    return SessionConfig(seats, deals=deals, log_path=None)
+    return SessionConfig(seats, log_path=None)
 
 
 # -------------------------------------------------------------------- bridge
@@ -78,14 +81,13 @@ def test_lobby_defaults_and_config(qtbot) -> None:  # type: ignore[no-untyped-de
     config = lobby.build_config()
     assert config.num_players == 4
     assert [s.kind for s in config.seats] == [SeatKind.HUMAN] + [SeatKind.SMART] * 3
-    assert config.deals == 1 and config.seed is None
+    assert config.seed is None
     assert config.log_path is not None  # logging stays on, as in the CLI
 
-    lobby.players.setCurrentIndex(0)  # 2 players
-    lobby.deals.setValue(5)
+    lobby.players.setCurrentIndex(0)  # 3 players
     lobby.rows[1].kind.setCurrentIndex(2)  # AI
     config = lobby.build_config()
-    assert config.num_players == 2 and config.deals == 5 and config.seed is None
+    assert config.num_players == 3 and config.seed is None
     assert config.seats[1].kind is SeatKind.AI
     assert not hasattr(lobby, "seed") and not hasattr(lobby, "fixed_seed")  # no fixed deal in the GUI
 
@@ -219,10 +221,10 @@ def test_lobby_allows_many_smart_bots_and_hidden_duplicates(qtbot, monkeypatch) 
     qtbot.addWidget(lobby)
     assert [r.seat_kind for r in lobby.rows[1:4]] == [SeatKind.SMART] * 3
     assert "wspólną pamięć" not in lobby.message.text()
-    lobby.players.setCurrentIndex(0)  # 2 players: seats 2.. are hidden
+    lobby.players.setCurrentIndex(0)  # 3 players: the 4th seat is hidden
+    lobby.rows[1].kind.setCurrentIndex(2)
     lobby.rows[3].kind.setCurrentIndex(2)
-    lobby.rows[4].kind.setCurrentIndex(2)
-    lobby.rows[4].select_model(lobby.rows[3].model_name)
+    lobby.rows[3].select_model(lobby.rows[1].model_name)
     assert "wspólną pamięć" not in lobby.message.text()
     lobby.build_config()  # hidden seats are not part of the session
 
@@ -252,8 +254,10 @@ def test_lobby_hides_seats_beyond_the_player_count(qtbot) -> None:  # type: igno
     lobby = LobbyView()
     qtbot.addWidget(lobby)
     lobby.show()
-    lobby.players.setCurrentIndex(1)  # 3 players
-    assert [row.isVisible() for row in lobby.rows] == [True, True, True, False, False]
+    lobby.players.setCurrentIndex(0)  # 3 players
+    assert [row.isVisible() for row in lobby.rows] == [True, True, True, False]
+    lobby.players.setCurrentIndex(1)  # 4 players
+    assert [row.isVisible() for row in lobby.rows] == [True, True, True, True]
 
 
 def test_start_button_emits_the_config(qtbot) -> None:  # type: ignore[no-untyped-def]
@@ -293,9 +297,9 @@ def test_control_bar_drives_pace(qtbot) -> None:  # type: ignore[no-untyped-def]
 
 def test_game_view_plays_a_bot_session_to_the_end(qtbot) -> None:  # type: ignore[no-untyped-def]
     session = SessionController(
-        _smart_config(3, deals=2),
+        _smart_config(3),
         controllers={f"P{i}": SmartHeartsBot(num_samples=0, seed=i) for i in range(3)},
-        engine_factory=_factory(1),
+        engine_factory=_factory(1, deals=2),
     )
     session.pace.delay = 0.0
     view = GameView(session)
@@ -304,7 +308,7 @@ def test_game_view_plays_a_bot_session_to_the_end(qtbot) -> None:  # type: ignor
 
     qtbot.waitUntil(lambda: view._finished, timeout=8000)
     assert view.status.text().startswith("Koniec gry")
-    assert sum(view.scoreboard.totals.values()) == 2 * 26
+    assert sum(view.scoreboard.totals.values()) == 2 * contract_total_penalty(GameContract.ROBBER, 3)
     assert view.log.count() > 100
     assert view.scoreboard.rowCount() == 3
     session.close()
@@ -319,8 +323,8 @@ def test_ui_event_loop_stays_responsive_while_bots_are_slow(qtbot) -> None:  # t
             return observation.legal_moves[0]
 
     session = SessionController(
-        _smart_config(2),
-        controllers={"P0": Slow(), "P1": Slow()},
+        _smart_config(3),
+        controllers={f"P{i}": Slow() for i in range(3)},
         engine_factory=_factory(1),
     )
     session.pace.delay = 0.0
@@ -363,8 +367,8 @@ def test_ui_event_loop_stays_responsive_while_a_bot_burns_cpu(qtbot) -> None:  #
             return observation.legal_moves[0]
 
     session = SessionController(
-        _smart_config(2),
-        controllers={"P0": Busy(), "P1": Busy()},
+        _smart_config(3),
+        controllers={f"P{i}": Busy() for i in range(3)},
         engine_factory=_factory(1),
     )
     session.pace.delay = 0.0
@@ -395,11 +399,19 @@ def test_ui_event_loop_stays_responsive_while_a_bot_burns_cpu(qtbot) -> None:  #
 
 def test_human_clicks_a_legal_card_button(qtbot) -> None:  # type: ignore[no-untyped-def]
     config = SessionConfig(
-        (SeatConfig(SeatKind.HUMAN), SeatConfig(SeatKind.SMART, smart_samples=0)),
+        (SeatConfig(SeatKind.HUMAN), *(SeatConfig(SeatKind.SMART, smart_samples=0),) * 2),
         log_path=None,
     )
-    controllers = {"P0": HumanGuiController(), "P1": SmartHeartsBot(num_samples=0, seed=1)}
-    session = SessionController(config, controllers=controllers, engine_factory=_factory(3))
+    controllers = {
+        "P0": HumanGuiController(),
+        "P1": SmartHeartsBot(num_samples=0, seed=1),
+        "P2": SmartHeartsBot(num_samples=0, seed=2),
+    }
+    session = SessionController(  # deal 19 of 21: P0 declares and opens, so nothing is on the table yet
+        config,
+        controllers=controllers,
+        engine_factory=lambda n: GameState.new(n, seed=3, first_declarer=0, start_deal=19),
+    )
     session.pace.delay = 0.0
     view = GameView(session)
     qtbot.addWidget(view)
@@ -414,9 +426,12 @@ def test_human_clicks_a_legal_card_button(qtbot) -> None:  # type: ignore[no-unt
         return [i for i in view.table_scene.items_by_card.values() if i.legal is True]
 
     qtbot.waitUntil(lambda: bool(playable()), timeout=3000)
-    assert sum(1 for i in view.table_scene.items_by_card.values() if i.face_up) == 26  # own hand
-    item = playable()[0]
-    point = view.table.mapFromScene(item.scenePos())
+    assert sum(1 for i in view.table_scene.items_by_card.values() if i.face_up) == 17  # own hand
+    # A fanned hand overlaps: click the first legal card that is not covered by its neighbour.
+    item, point = next(
+        (i, p) for i in playable() for p in [view.table.mapFromScene(i.scenePos())]
+        if view.table.itemAt(p) is i
+    )
     qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=point)  # a real click
     qtbot.waitUntil(lambda: any(m.player_id == "P0" and m.card == item.code for m in moves), timeout=3000)
     session.close()
@@ -434,8 +449,12 @@ def test_controller_error_dialog_choice_reaches_the_runner(qtbot, monkeypatch) -
             return observation.legal_moves[0]
 
     session = SessionController(
-        _smart_config(2),
-        controllers={"P0": Boom(), "P1": SmartHeartsBot(num_samples=0, seed=1)},
+        _smart_config(3),
+        controllers={
+            "P0": Boom(),
+            "P1": SmartHeartsBot(num_samples=0, seed=1),
+            "P2": SmartHeartsBot(num_samples=0, seed=2),
+        },
         engine_factory=_factory(1),
     )
     session.pace.delay = 0.0
@@ -457,7 +476,7 @@ def test_controller_error_dialog_choice_reaches_the_runner(qtbot, monkeypatch) -
 def test_main_window_switches_between_lobby_and_game(qtbot, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     window = MainWindow()
     qtbot.addWidget(window)
-    window.start_session(_smart_config(2, deals=50))
+    window.start_session(_smart_config(3))
     assert window.stack.currentWidget() is window.game
     session = window.session
     assert session is not None
