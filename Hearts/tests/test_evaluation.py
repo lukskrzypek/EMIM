@@ -107,7 +107,7 @@ def test_scores_stay_in_range_for_random_play_in_every_contract(players: int) ->
     """Evaluate every legal move of random deals: no crashes, scores within 0-100."""
     rng = random.Random(3)
     for index, contract in enumerate(CONTRACT_ORDER):
-        engine = Engine.new(players, seed=players, start_deal=index * players + 1)
+        engine = Engine.new(players, seed=players, start_deal=index + 1)
         engine.auto_advance = False
         assert engine.current_contract is contract
         plays: list[str] = []

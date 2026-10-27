@@ -34,8 +34,8 @@ from gui.qt.table.card_item import CardItem
 
 
 def _factory(seed: int, deals: int = 1):  # type: ignore[no-untyped-def]
-    """A match that starts ``deals`` deals before the end (a full match is 21/28 deals)."""
-    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7 - deals + 1)
+    """A game of 7 deals, started so that ``deals`` of them are still to play."""
+    return lambda n: GameState.new(n, seed=seed, start_deal=7 - deals + 1)
 
 
 def _smart_config(n: int = 3) -> SessionConfig:
@@ -81,13 +81,14 @@ def test_lobby_defaults_and_config(qtbot) -> None:  # type: ignore[no-untyped-de
     config = lobby.build_config()
     assert config.num_players == 4
     assert [s.kind for s in config.seats] == [SeatKind.HUMAN] + [SeatKind.SMART] * 3
-    assert config.seed is None
+    assert config.seed is None and config.games == 1
     assert config.log_path is not None  # logging stays on, as in the CLI
 
     lobby.players.setCurrentIndex(0)  # 3 players
+    lobby.games.setValue(4)
     lobby.rows[1].kind.setCurrentIndex(2)  # AI
     config = lobby.build_config()
-    assert config.num_players == 3 and config.seed is None
+    assert config.num_players == 3 and config.games == 4 and config.seed is None
     assert config.seats[1].kind is SeatKind.AI
     assert not hasattr(lobby, "seed") and not hasattr(lobby, "fixed_seed")  # no fixed deal in the GUI
 
@@ -308,7 +309,10 @@ def test_game_view_plays_a_bot_session_to_the_end(qtbot) -> None:  # type: ignor
 
     qtbot.waitUntil(lambda: view._finished, timeout=8000)
     assert view.status.text().startswith("Koniec gry")
-    assert sum(view.scoreboard.totals.values()) == 2 * contract_total_penalty(GameContract.ROBBER, 3)
+    assert sum(view.scoreboard.totals.values()) == (
+        contract_total_penalty(GameContract.NO_7TH_AND_LAST, 3)
+        + contract_total_penalty(GameContract.ROBBER, 3)
+    )
     assert view.log.count() > 100
     assert view.scoreboard.rowCount() == 3
     session.close()
@@ -410,7 +414,7 @@ def test_human_clicks_a_legal_card_button(qtbot) -> None:  # type: ignore[no-unt
     session = SessionController(  # deal 19 of 21: P0 declares and opens, so nothing is on the table yet
         config,
         controllers=controllers,
-        engine_factory=lambda n: GameState.new(n, seed=3, first_declarer=0, start_deal=19),
+        engine_factory=lambda n: GameState.new(n, seed=3, first_declarer=0, start_deal=1),
     )
     session.pace.delay = 0.0
     view = GameView(session)

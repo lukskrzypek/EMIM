@@ -31,17 +31,14 @@ MIX = (
 )
 
 
-def contract_start(contract: GameContract, players: int = 4) -> int:
-    """Deal number at which ``contract`` is played for the first time."""
-    return CONTRACT_ORDER.index(contract) * players + 1
-
-
 def mix_state(contract: GameContract = NT, first_declarer: int = 0) -> GameState:
+    """A fixed deal of ``contract`` whose declarer is ``first_declarer`` (P0 by default)."""
+    index = CONTRACT_ORDER.index(contract)
     return GameState.new(
         4,
         hands=[hand(s) for s in MIX],
-        first_declarer=first_declarer,
-        start_deal=contract_start(contract),
+        first_declarer=(first_declarer - index) % 4,
+        start_deal=index + 1,
     )
 
 
@@ -77,11 +74,11 @@ def test_unsupported_player_counts(players: int) -> None:
         GameState.new(players)
 
 
-@pytest.mark.parametrize(("players", "size", "deals"), [(4, 13, 28), (3, 17, 21)])
-def test_new_match_shape(players: int, size: int, deals: int) -> None:
+@pytest.mark.parametrize(("players", "size"), [(4, 13), (3, 17)])
+def test_new_game_is_seven_deals(players: int, size: int) -> None:
     state = GameState.new(players, seed=1)
     assert state.num_players == players
-    assert state.total_deals == deals
+    assert state.games == 1 and state.total_deals == 7
     assert state.total_tricks == size
     assert state.deal_number == 1 and state.trick_number == 1
     assert state.current_contract is NT
@@ -132,7 +129,9 @@ def test_bad_provided_hands_are_rejected() -> None:
     with pytest.raises(ValueError):
         GameState.new(4, hands=short)
     with pytest.raises(ValueError):
-        GameState.new(4, start_deal=29)
+        GameState.new(4, start_deal=8)
+    with pytest.raises(ValueError):
+        GameState.new(4, games=0)
     with pytest.raises(ValueError):
         GameState.new(4, first_declarer=4)
 
@@ -141,16 +140,15 @@ def test_bad_provided_hands_are_rejected() -> None:
 
 
 @pytest.mark.parametrize("players", [3, 4])
-def test_schedule_gives_every_player_every_contract_once(players: int) -> None:
-    for first in range(players):
-        plan = schedule(players, first)
-        assert len(plan) == players * 7
-        assert len(set(plan)) == len(plan)
-        assert {(c, f"P{p}") for c in CONTRACT_ORDER for p in range(players)} == set(plan)
-        declarers = [int(d[1:]) for _, d in plan]
-        assert all((b - a) % players == 1 for a, b in zip(declarers, declarers[1:]))
-        assert declarers[0] == first
-        assert [c for c, _ in plan] == [c for c in CONTRACT_ORDER for _ in range(players)]
+def test_schedule_plays_each_contract_once_then_repeats(players: int) -> None:
+    plan = schedule(players, 0)
+    assert [c for c, _ in plan] == list(CONTRACT_ORDER)
+    declarers = [int(d[1:]) for _, d in plan]
+    assert declarers[0] == 0
+    assert all((b - a) % players == 1 for a, b in zip(declarers, declarers[1:]))
+    repeated = schedule(players, 1, games=2)
+    assert [c for c, _ in repeated] == list(CONTRACT_ORDER) * 2
+    assert len(repeated) == 14
 
 
 @pytest.mark.parametrize("players", [3, 4])
@@ -289,8 +287,8 @@ def test_deal_ends_after_all_tricks_and_next_deal_starts() -> None:
     assert last.deal_scores is not None and sum(last.deal_scores.values()) == 260
     assert sum(r.deal_over for r in results) == 1
     assert len(results) == 52
-    # The state is already at the start of deal 2 (NO_TRICKS again, next declarer).
-    assert state.deal_number == 2 and state.current_contract is NT
+    # The state is already at the start of deal 2 (NO_HEARTS, next declarer).
+    assert state.deal_number == 2 and state.current_contract is GameContract.NO_HEARTS
     assert state.declarer == "P2" and state.current_player == "P2"
     assert state.trick_number == 1 and state.trick_history == [] and state.played_cards == []
     assert state.scores == dict.fromkeys(state.player_ids, 0)
@@ -300,7 +298,7 @@ def test_deal_ends_after_all_tricks_and_next_deal_starts() -> None:
 
 
 def test_last_deal_ends_the_match() -> None:
-    state = GameState.new(4, seed=8, start_deal=28)
+    state = GameState.new(4, seed=8, start_deal=7)
     assert state.current_contract is GameContract.ROBBER
     rng = random.Random(0)
     result = None
@@ -345,7 +343,7 @@ def test_manual_advance_keeps_the_finished_deal_visible() -> None:
 
 
 def test_manual_advance_still_ends_the_match() -> None:
-    state = GameState.new(4, seed=2, start_deal=28)
+    state = GameState.new(4, seed=2, start_deal=7)
     state.auto_advance = False
     play_out(state, random.Random(1))
     assert state.is_over and state.deal_finished
@@ -364,14 +362,14 @@ def test_winners_lowest_total_with_ties() -> None:
 
 @pytest.mark.parametrize("players", [3, 4])
 def test_full_random_matches_keep_the_invariants(players: int) -> None:
-    expected_moves = players * 7 * players * (13 if players == 4 else 17)
+    expected_moves = 7 * players * (13 if players == 4 else 17)
     for seed in range(4):
         state = GameState.new(players, seed=seed)
         plan = schedule(players, state.first_declarer)
         moves = play_out(state, random.Random(seed))
         assert moves == expected_moves
         assert state.is_over and state.deal_number == state.total_deals
-        assert len(state.deal_results) == players * 7
+        assert len(state.deal_results) == 7
         for result, (contract, _) in zip(state.deal_results, plan, strict=True):
             assert sum(result.scores.values()) == contract_total_penalty(contract, players)
         assert sum(state.total_scores.values()) == sum(
@@ -441,7 +439,7 @@ def test_clone_is_independent() -> None:
 
 
 def test_clone_can_be_played_to_the_end() -> None:
-    state = GameState.new(4, seed=6, start_deal=28)
+    state = GameState.new(4, seed=6, start_deal=7)
     twin = state.clone()
     play_out(twin, random.Random(1))
     assert twin.is_over and not state.is_over

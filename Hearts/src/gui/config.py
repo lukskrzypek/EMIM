@@ -9,6 +9,7 @@ LOG_PATH = ROOT / "logs" / "trajectories.jsonl"
 CARDS_DIR = ROOT / "assets" / "cards"  # optional PNG deck: 2C.png ... AS.png, back.png
 
 PLAYER_COUNTS: tuple[int, ...] = (3, 4)  # King: 3 or 4 players
+MAX_GAMES = 100  # lobby: how many games of 7 deals to play
 SMART_SAMPLES = 40
 GUIDELINES_MAX_CHARS = 100  # user's extra instructions for an AI bot
 NAME_MAX_CHARS = 10  # seat name that separates the memory files of one model

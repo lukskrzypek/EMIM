@@ -6,10 +6,11 @@ import json
 from dataclasses import dataclass, field
 
 from controllers.ai_bot import PROVIDERS
-from gui.config import PLAYER_COUNTS, SMART_SAMPLES
+from gui.config import MAX_GAMES, PLAYER_COUNTS, SMART_SAMPLES
 from gui.core.seat_config import SeatConfig, SeatKind, clean_guidelines, clean_name
 
 DEFAULT_PLAYERS = 4
+DEFAULT_GAMES = 1
 
 
 def default_seats(count: int = max(PLAYER_COUNTS)) -> tuple[SeatConfig, ...]:
@@ -21,12 +22,14 @@ def default_seats(count: int = max(PLAYER_COUNTS)) -> tuple[SeatConfig, ...]:
 @dataclass(frozen=True)
 class LobbyState:
     players: int = DEFAULT_PLAYERS
+    games: int = DEFAULT_GAMES  # games of 7 deals
     seats: tuple[SeatConfig, ...] = field(default_factory=default_seats)  # always max(PLAYER_COUNTS)
 
     def to_json(self) -> str:
         return json.dumps(
             {
                 "players": self.players,
+                "games": self.games,
                 "seats": [
                     {
                         "kind": seat.kind.value,
@@ -53,6 +56,7 @@ class LobbyState:
             data = {}
 
         players = data.get("players")
+        games = data.get("games")
         seats = list(default.seats)
         raw_seats = data.get("seats")
         if isinstance(raw_seats, list):
@@ -60,6 +64,7 @@ class LobbyState:
                 seats[i] = _parse_seat(raw, seats[i])
         return cls(
             players=players if players in PLAYER_COUNTS else default.players,
+            games=games if isinstance(games, int) and 1 <= games <= MAX_GAMES else default.games,
             seats=tuple(seats),
         )
 

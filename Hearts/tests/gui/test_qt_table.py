@@ -34,13 +34,13 @@ def _distinct_colors(pixmap: QPixmap) -> int:
 
 
 def _factory(seed: int, deals: int = 1):  # type: ignore[no-untyped-def]
-    """A match that starts ``deals`` deals before the end (a full match is 21/28 deals)."""
-    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7 - deals + 1)
+    """A game of 7 deals, started so that ``deals`` of them are still to play."""
+    return lambda n: GameState.new(n, seed=seed, start_deal=7 - deals + 1)
 
 
 def _p0_opens(seed: int):  # type: ignore[no-untyped-def]
-    """3 players, deals 19-21: P0 declares (and so opens) deal 19, the others come later."""
-    return lambda n: GameState.new(n, seed=seed, first_declarer=0, start_deal=19)
+    """3 players: P0 declares and opens deal 1, so the table is still empty."""
+    return lambda n: GameState.new(n, seed=seed, first_declarer=0, start_deal=1)
 
 
 # ------------------------------------------------------------------ renderers
@@ -263,7 +263,11 @@ def test_hot_seat_flow_through_the_real_ui(qtbot) -> None:  # type: ignore[no-un
         "P1": HumanGuiController(),
         "P2": SmartHeartsBot(num_samples=0, seed=2),
     }
-    session = SessionController(config, controllers=controllers, engine_factory=_factory(3))
+    session = SessionController(
+        config,
+        controllers=controllers,
+        engine_factory=lambda n: GameState.new(n, seed=3, first_declarer=0),
+    )
     session.pace.delay = 0.0
     view = GameView(session)
     qtbot.addWidget(view)
@@ -368,5 +372,5 @@ def test_multi_deal_session_with_a_human_waits_on_the_result_overlay(qtbot) -> N
     assert view.controls.pause_button.text() == "Wznów"  # the runner paused between deals
     session.pace.resume()
     view.table.result.hide()
-    qtbot.waitUntil(lambda: view.model.deal_number == 20, timeout=5000)
+    qtbot.waitUntil(lambda: view.model.deal_number == 2, timeout=5000)
     session.close()

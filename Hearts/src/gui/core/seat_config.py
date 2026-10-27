@@ -1,4 +1,4 @@
-"""Lobby output: who sits where (one session = one match of 7 deals per player)."""
+"""Lobby output: who sits where (one game = 7 deals, one of each contract)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,14 @@ from enum import Enum
 from pathlib import Path
 
 from controllers.ai_bot import DEFAULT_MODEL, DEFAULT_PROVIDER
-from gui.config import GUIDELINES_MAX_CHARS, LOG_PATH, NAME_MAX_CHARS, PLAYER_COUNTS, SMART_SAMPLES
+from gui.config import (
+    GUIDELINES_MAX_CHARS,
+    LOG_PATH,
+    MAX_GAMES,
+    NAME_MAX_CHARS,
+    PLAYER_COUNTS,
+    SMART_SAMPLES,
+)
 
 
 class SeatKind(str, Enum):
@@ -83,12 +90,15 @@ class SessionConfig:
     """Everything the runner needs; seats are ``P0``, ``P1``, ... in order."""
 
     seats: tuple[SeatConfig, ...]
-    seed: int | None = None  # seed of the match (first declarer and every deal); ``None`` = random
+    games: int = 1  # games of 7 deals played one after another
+    seed: int | None = None  # seed of the session (first declarer and every deal); ``None`` = random
     log_path: Path | None = LOG_PATH  # trajectories.jsonl; ``None`` switches logging off
 
     def __post_init__(self) -> None:
         if len(self.seats) not in PLAYER_COUNTS:
             raise ValueError(f"Player count must be one of {PLAYER_COUNTS}, got {len(self.seats)}")
+        if not 1 <= self.games <= MAX_GAMES:
+            raise ValueError(f"Game count must be in 1..{MAX_GAMES}, got {self.games}")
         if duplicates := duplicate_ai_memories(self.seats):
             # Two seats on one memory file would overwrite each other's notes.
             raise ValueError(

@@ -24,6 +24,7 @@ class GameContract(Enum):
 
 # Fixed order of a match: each contract is played once per declarer (SPEC 2.1).
 CONTRACT_ORDER: tuple[GameContract, ...] = tuple(GameContract)
+DEALS_PER_GAME = len(CONTRACT_ORDER)  # one deal of each contract, in this order
 
 PENALTY_TRICK = 20  # NO_TRICKS: every trick taken
 PENALTY_HEART = 20  # NO_HEARTS: every heart taken

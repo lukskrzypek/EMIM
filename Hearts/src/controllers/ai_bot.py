@@ -85,7 +85,7 @@ USER_GUIDELINES = ""
 
 SYSTEM_PROMPT = """\
 Expert Kierki (King) player. Cards: rank (2-9,T,J,Q,K,A) + suit (C,D,S,H). Rank and suit are followed in Legal.
-A match is a series of deals; each deal has one contract (see the Rule line). Goal: lowest total penalty points.
+A game is 7 deals, one of each contract in this order (see the Rule line). Goal: lowest total penalty points.
 Contracts: NO_TRICKS (each trick 20), NO_HEARTS (each heart 20), NO_QUEENS (each Q 60), NO_MEN (each K/J 30),
 NO_KING_OF_HEARTS (KH 150), NO_7TH_AND_LAST (tricks 7 and last 75 each), ROBBER (all of them combined).
 Heuristics: duck when following suit; dump penalty cards when void; lead low from long suits; track Voids.

@@ -80,7 +80,7 @@ OPENAI_PROJECT_DENIED = (
 
 
 def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7)  # just the last deal
+    return lambda n: GameState.new(n, seed=seed, start_deal=7)  # just the last deal
 
 
 class FailsFrom(PlayerController):

@@ -1,7 +1,8 @@
 """King game engine: a pure, deterministic state machine for a whole match (no I/O).
 
-A match has ``num_players * 7`` deals (SPEC.md, section 2). ``GameState.play_card``
-moves the state forward and, when a deal ends, deals the next one by itself.
+One game is 7 deals, one of each contract in order (SPEC.md, section 2). A session
+may play several games back to back. ``GameState.play_card`` moves the state
+forward and, when a deal ends, deals the next one by itself.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import dataclass, field
 
 from engine.contracts import (
     CONTRACT_ORDER,
+    DEALS_PER_GAME,
     GameContract,
     KING_OF_HEARTS,
     evaluate_trick_penalty,
@@ -22,9 +24,6 @@ from engine.contracts import (
 )
 from engine.models import KING_PLAYER_COUNTS, Card, Suit, king_deck
 from engine.observation import PlayerObservation
-
-CONTRACTS_PER_PLAYER = len(CONTRACT_ORDER)
-
 
 class IllegalMoveError(ValueError):
     """Raised when a move violates the rules or the turn order."""
@@ -81,6 +80,7 @@ class GameState:
     num_players: int
     seed: int
     first_declarer: int
+    games: int = 1  # how many games of 7 deals this session plays
     deal_number: int = 1  # 1..total_deals
     current_contract: GameContract = CONTRACT_ORDER[0]
     declarer: str = "P0"
@@ -113,21 +113,24 @@ class GameState:
         hands: Sequence[Sequence[str | Card]] | None = None,
         first_declarer: int | None = None,
         start_deal: int = 1,
+        games: int = 1,
     ) -> GameState:
-        """Start a match.
+        """Start a session of ``games`` games (7 deals each).
 
         ``hands`` fixes the cards of the first dealt deal (tests); ``start_deal``
-        begins the match at that deal number (to play a chosen contract).
+        begins the session at that deal number (to play a chosen contract).
         """
         if num_players not in KING_PLAYER_COUNTS:
             raise ValueError(f"Player count must be one of {KING_PLAYER_COUNTS}, got {num_players}")
+        if games < 1:
+            raise ValueError(f"Game count must be positive, got {games}")
         if seed is None:
             seed = random.SystemRandom().randrange(2**31)
         if first_declarer is None:
             first_declarer = random.Random(f"{seed}:first-declarer").randrange(num_players)
         if not 0 <= first_declarer < num_players:
             raise ValueError(f"first_declarer must be in 0..{num_players - 1}")
-        state = cls(num_players, seed, first_declarer)
+        state = cls(num_players, seed, first_declarer, games=games)
         if not 1 <= start_deal <= state.total_deals:
             raise ValueError(f"start_deal must be in 1..{state.total_deals}, got {start_deal}")
         state.total_scores = dict.fromkeys(state.player_ids, 0)
@@ -156,7 +159,7 @@ class GameState:
 
     @property
     def total_deals(self) -> int:
-        return self.num_players * CONTRACTS_PER_PLAYER
+        return self.games * DEALS_PER_GAME
 
     @property
     def total_tricks(self) -> int:
@@ -187,7 +190,7 @@ class GameState:
 
     def _begin_deal(self, hands: Sequence[Sequence[str | Card]] | None = None) -> None:
         index = self.deal_number - 1
-        self.current_contract = CONTRACT_ORDER[index // self.num_players]
+        self.current_contract = CONTRACT_ORDER[index % DEALS_PER_GAME]
         self.declarer = f"P{(self.first_declarer + index) % self.num_players}"
         ids = self.player_ids
         deck = king_deck(self.num_players)
@@ -375,11 +378,17 @@ class GameState:
         )
 
 
-def schedule(num_players: int, first_declarer: int) -> list[tuple[GameContract, str]]:
-    """(contract, declarer) of every deal of a match, in order (SPEC section 2.1)."""
+def schedule(
+    num_players: int, first_declarer: int, games: int = 1
+) -> list[tuple[GameContract, str]]:
+    """(contract, declarer) of every deal, in order (SPEC section 2.1).
+
+    Each game is the seven contracts once, in ``CONTRACT_ORDER``. The declarer
+    moves one seat clockwise every deal, and keeps going across games.
+    """
     return [
-        (CONTRACT_ORDER[d // num_players], f"P{(first_declarer + d) % num_players}")
-        for d in range(num_players * CONTRACTS_PER_PLAYER)
+        (CONTRACT_ORDER[d % DEALS_PER_GAME], f"P{(first_declarer + d) % num_players}")
+        for d in range(games * DEALS_PER_GAME)
     ]
 
 

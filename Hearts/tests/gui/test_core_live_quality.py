@@ -42,8 +42,8 @@ class LastLegal(PlayerController):
 def _play(
     players: int, seed: int, log: Path | None, start_deal: int | None = None
 ) -> tuple[Collector, GameRunner]:
-    """Play from ``start_deal`` to the end of the match (default: only the last deal)."""
-    first = players * 7 if start_deal is None else start_deal
+    """Play from ``start_deal`` to the end of the game (default: only the last deal)."""
+    first = 7 if start_deal is None else start_deal
     controllers: dict[str, PlayerController] = {
         f"P{i}": (LastLegal() if i == 0 else SmartHeartsBot(num_samples=0, seed=i))
         for i in range(players)
@@ -76,8 +76,8 @@ def test_engine_code_normalisation() -> None:
 @pytest.mark.parametrize("players", [3, 4])
 def test_live_numbers_equal_the_offline_report(tmp_path: Path, players: int) -> None:
     log = tmp_path / "trajectories.jsonl"
-    # Last deal of NO_7TH_AND_LAST, then the first of ROBBER: two different contracts.
-    sink, _ = _play(players, seed=11, log=log, start_deal=players * 6)
+    # Deals 6 and 7: NO_7TH_AND_LAST, then ROBBER.
+    sink, _ = _play(players, seed=11, log=log, start_deal=6)
 
     labels = {f"P{i}": f"seat {i}" for i in range(players)}
     live = LiveQuality(labels)

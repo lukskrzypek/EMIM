@@ -12,13 +12,14 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from controllers.ai_bot import DEFAULT_MEMORY_DIR
-from gui.config import PLAYER_COUNTS
-from gui.core.lobby_state import DEFAULT_PLAYERS, LobbyState
+from gui.config import MAX_GAMES, PLAYER_COUNTS
+from gui.core.lobby_state import DEFAULT_GAMES, DEFAULT_PLAYERS, LobbyState
 from gui.core.model_catalog import load_all_models
 from gui.core.seat_config import SeatKind, SessionConfig
 from gui.qt.lobby.memory_dialog import MemoryDialog
@@ -46,13 +47,23 @@ class LobbyView(QWidget):
 
         title = QLabel("Kierki")
         title.setObjectName("title")
-        subtitle = QLabel("Kierki polskie (King): wybierz graczy przy stole i rozpocznij partię (7 rozdań na gracza).")
+        subtitle = QLabel(
+            "Kierki polskie (King). Jedna gra to 7 rozdań, po jednym na każdy kontrakt."
+        )
         subtitle.setObjectName("subtitle")
 
         self.players = QComboBox()
         for n in PLAYER_COUNTS:
             self.players.addItem(f"{n} graczy", n)
         self.players.setCurrentIndex(PLAYER_COUNTS.index(DEFAULT_PLAYERS))
+
+        self.games = QSpinBox()
+        self.games.setRange(1, MAX_GAMES)
+        self.games.setValue(DEFAULT_GAMES)
+        self.games.setToolTip(
+            "Ile gier rozegrać jedna po drugiej. Każda gra to 7 rozdań w kolejności: "
+            "bez lew, bez kierów, bez dam, bez panów, bez króla kier, bez 7. i ostatniej, rozbójnik."
+        )
 
         self.rows: list[SeatRow] = []
         seats_box = QVBoxLayout()
@@ -65,6 +76,7 @@ class LobbyView(QWidget):
 
         options = QFormLayout()
         options.addRow("Liczba graczy", self.players)
+        options.addRow("Liczba gier", self.games)
 
         self.message = QLabel()
         self.message.setObjectName("warning")
@@ -112,11 +124,13 @@ class LobbyView(QWidget):
         """Everything the user chose, for ``AppSettings`` (all seats, also hidden ones)."""
         return LobbyState(
             players=self.num_players,
+            games=self.games.value(),
             seats=tuple(row.config() for row in self.rows),
         )
 
     def apply_state(self, state: LobbyState) -> None:
         self.players.setCurrentIndex(PLAYER_COUNTS.index(state.players))
+        self.games.setValue(state.games)
         for row, seat in zip(self.rows, state.seats, strict=False):
             row.apply(seat)
         self._update_state()
@@ -125,6 +139,7 @@ class LobbyView(QWidget):
         n = self.num_players
         return SessionConfig(
             seats=tuple(row.config() for row in self.rows[:n]),
+            games=self.games.value(),
         )
 
     def open_memory_dialog(self) -> None:

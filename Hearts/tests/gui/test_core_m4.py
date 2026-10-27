@@ -35,7 +35,7 @@ def test_parse_ignored() -> None:
 
 def test_report_of_a_real_log_equals_the_library_report(tmp_path: Path) -> None:
     log = tmp_path / "trajectories.jsonl"
-    _play(4, seed=21, log=log, start_deal=4 * 6)
+    _play(4, seed=21, log=log, start_deal=6)
 
     result = load_report(log, ())
     assert result.error is None and result.report is not None
@@ -177,7 +177,7 @@ def _aggressiveness(evaluator: LiveEvaluator) -> float:
         pace=PaceControl(0),
         controllers={f"P{i}": SmartHeartsBot(num_samples=0, seed=i) for i in range(4)},
         analyzer=evaluator,
-        engine_factory=lambda n: GameState.new(n, seed=9, start_deal=n * 7),
+        engine_factory=lambda n: GameState.new(n, seed=9, start_deal=7),
     )
     runner.start()
     sink.wait_finished(timeout=30)

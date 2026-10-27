@@ -13,8 +13,13 @@ from engine.state import GameState
 
 
 def first_trick_state(contract: GameContract, players: int = 4) -> GameState:
+    """Deal of ``contract`` opened by P1."""
+    index = CONTRACT_ORDER.index(contract)
     return GameState.new(
-        players, seed=3, first_declarer=1, start_deal=CONTRACT_ORDER.index(contract) * players + 1
+        players,
+        seed=3,
+        first_declarer=(1 - index) % players,
+        start_deal=index + 1,
     )
 
 
@@ -23,7 +28,7 @@ def test_observation_fields_at_the_start_of_a_deal() -> None:
     obs = state.get_player_observation("P1")
     assert obs.player_id == "P1" and obs.num_players == 4
     assert obs.contract is GameContract.NO_QUEENS and obs.declarer == "P1"
-    assert obs.deal_number == 9 and obs.total_deals == 28
+    assert obs.deal_number == 3 and obs.total_deals == 7
     assert obs.trick_number == 1 and obs.total_tricks == 13
     assert obs.current_player == "P1" and not obs.game_over
     assert obs.hand == [str(c) for c in sorted(state.hands["P1"])]
@@ -71,7 +76,7 @@ def test_prompt_is_short_and_mentions_the_contract(contract: GameContract) -> No
     lines = prompt.splitlines()
     assert len(lines) <= 20
     assert lines[0] == (
-        f"KING 4p | You: P1 | Deal {CONTRACT_ORDER.index(contract) * 4 + 1}/28 "
+        f"KING 4p | You: P1 | Deal {CONTRACT_ORDER.index(contract) + 1}/7 "
         f"{contract.value} (declarer P1) | Trick 1/13 | Turn: P1"
     )
     assert CONTRACT_RULES[contract] in prompt
@@ -91,7 +96,7 @@ def test_prompt_lines_stay_bounded_late_in_the_deal() -> None:
     prompt = state.get_player_observation(state.current_player or "P0").to_icl_prompt()
     lines = prompt.splitlines()
     assert len(lines) <= 20
-    assert "KING 3p" in lines[0] and "Trick 16/17" in lines[0] and "Deal 1/21" in lines[0]
+    assert "KING 3p" in lines[0] and "Trick 16/17" in lines[0] and "Deal 1/7" in lines[0]
     assert any(line.startswith("History (last 8 of 15):") for line in lines)
     assert prompt.count("-> Win:") == 8
 
@@ -110,7 +115,7 @@ def test_prompt_history_limit_can_be_changed() -> None:
 
 
 def test_game_over_prompt() -> None:
-    state = GameState.new(4, seed=1, start_deal=28)
+    state = GameState.new(4, seed=1, start_deal=7)
     rng = random.Random(1)
     while not state.is_over:
         player = state.current_player
@@ -149,10 +154,10 @@ def test_logged_prompts_are_read_back_by_the_trajectory_loader(
 
     path = tmp_path / "trajectories.jsonl"
     logger = ICLLogger(path)
-    state = GameState.new(players, seed=9, start_deal=players + 1)  # NO_HEARTS, 2 deals
+    state = GameState.new(players, seed=9, start_deal=2)  # NO_HEARTS, then NO_QUEENS
     rng = random.Random(1)
     logged = 0
-    while state.deal_number <= players + 2:
+    while state.deal_number <= 3:
         player = state.current_player
         assert player is not None
         observation = state.get_player_observation(player)
@@ -162,7 +167,10 @@ def test_logged_prompts_are_read_back_by_the_trajectory_loader(
         logged += 1
     loaded = load_moves(path)
     assert loaded.records == logged and len(loaded.moves) == logged and not loaded.skipped
-    assert {m.state.contract for m in loaded.moves} == {GameContract.NO_HEARTS}
+    assert {m.state.contract for m in loaded.moves} == {
+        GameContract.NO_HEARTS,
+        GameContract.NO_QUEENS,
+    }
     assert all(m.state.num_players == players for m in loaded.moves)
     per_deal = players * (13 if players == 4 else 17)
     assert sum(1 for m in loaded.moves if not m.state.history and not m.state.current_trick) == 2

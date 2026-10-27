@@ -12,7 +12,7 @@ import main
 from collector import Collector
 from controllers.base import PlayerController
 from controllers.smart_bot import SmartHeartsBot
-from engine.contracts import GameContract, contract_total_penalty
+from engine.contracts import CONTRACT_ORDER, GameContract, contract_total_penalty
 from engine.observation import PlayerObservation
 from engine.state import GameState
 from gui.core.events import (
@@ -44,8 +44,8 @@ def _bots(n: int, samples: int = 3) -> dict[str, PlayerController]:
 
 
 def _state(n: int, seed: int, deals: int = 1) -> GameState:
-    """A match that starts ``deals`` deals before the end (a full match is 21/28 deals)."""
-    return GameState.new(n, seed=seed, start_deal=n * 7 - deals + 1)
+    """A game of 7 deals, started so that ``deals`` of them are still to play."""
+    return GameState.new(n, seed=seed, start_deal=7 - deals + 1)
 
 
 def _factory(seed: int, deals: int = 1):  # type: ignore[no-untyped-def]
@@ -120,9 +120,11 @@ def test_multiple_deals_accumulate_totals() -> None:
     done = sink.wait_finished()
 
     assert done.deals_played == 3 and not done.aborted
-    assert sum(done.totals.values()) == 3 * contract_total_penalty(GameContract.ROBBER, 3)
-    assert [d.deal_number for d in sink.of(DealFinished)] == [19, 20, 21]
-    assert [d.deal_number for d in sink.of(DealStarted)] == [19, 20, 21]
+    assert sum(done.totals.values()) == sum(
+        contract_total_penalty(CONTRACT_ORDER[i], 3) for i in range(4, 7)
+    )
+    assert [d.deal_number for d in sink.of(DealFinished)] == [5, 6, 7]
+    assert [d.deal_number for d in sink.of(DealStarted)] == [5, 6, 7]
     assert sink.of(DealFinished)[-1].totals == done.totals
 
 

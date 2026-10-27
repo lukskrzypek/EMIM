@@ -15,7 +15,7 @@ from controllers.human_cli import HumanCLIController
 from controllers.smart_bot import SmartHeartsBot
 from engine.state import GameState
 from evaluation.report import evaluate_log, format_report
-from utils.contract_text import contract_label
+from utils.contract_text import contract_label, session_heading
 from utils.icl_logger import ICLLogger
 
 PLAYER_COUNTS = (3, 4)
@@ -108,7 +108,7 @@ def play_session(
 
 def _show_deal_start(state: GameState) -> None:
     print(
-        f"\n--- Rozdanie {state.deal_number}/{state.total_deals}: "
+        f"\n--- {session_heading(state.deal_number, state.total_deals)}: "
         f"{contract_label(state.current_contract)} (rozdaje {state.declarer}) ---"
     )
     print("Ręce:")
@@ -119,7 +119,7 @@ def _show_deal_start(state: GameState) -> None:
 
 def _show_deal_end(state: GameState) -> None:
     print("\nKary w rozdaniu: " + _format_scores(state.scores))
-    print("Suma w partii:   " + _format_scores(state.total_scores))
+    print("Suma w grze:    " + _format_scores(state.total_scores))
 
 
 def _format_scores(scores: Mapping[str, int]) -> str:
@@ -186,7 +186,7 @@ def _ask_kind(player_id: str) -> str:
 
 def _ask_match_count() -> int:
     while True:
-        raw = input("Ile partii zasymulować? ").strip()
+        raw = input("Ile gier zasymulować? Każda gra to 7 rozdań. ").strip()
         if raw.isdigit() and int(raw) >= 1:
             return int(raw)
         print("Podaj dodatnią liczbę całkowitą.")
@@ -219,7 +219,7 @@ def setup_match(
     if "human" in kinds:
         return num_players, controllers, 1, False
     matches = _ask_match_count()
-    print(f"Partii: {matches}")
+    print(f"Gier: {matches}")
     return num_players, controllers, matches, matches == 1
 
 

@@ -19,16 +19,16 @@
 
 ### 2.1 Przebieg partii
 
-- Partia składa się z `num_players * 7` rozdań: **28** (4 graczy) albo **21** (3 graczy). Każdy gracz deklaruje każdy z 7 kontraktów dokładnie raz.
-- Kontrakty idą w **stałej kolejności** (każdy kontrakt rozgrywany jest `num_players` razy z rzędu, za każdym razem z innym deklarującym):
+- Partia składa się z **jednej gry albo kilku gier z rzędu**. Jedna gra to **7 rozdań**: każdy kontrakt dokładnie raz, w stałej kolejności:
 
   `NO_TRICKS -> NO_HEARTS -> NO_QUEENS -> NO_MEN -> NO_KING_OF_HEARTS -> NO_7TH_AND_LAST -> ROBBER`
 
+- Liczbę gier wybiera się przed startem (lobby: „Liczba gier”; konsola, gdy grają same boty: pytanie o liczbę gier). Domyślnie 1.
 - Deklarujący:
-  - w pierwszym rozdaniu **losowy** (z `seed`, deterministycznie),
-  - w każdym następnym kolejny gracz zgodnie z ruchem wskazówek zegara.
-  - Dla rozdania o numerze `d` (od 0): `declarer = (first_declarer + d) % num_players`, `contract = CONTRACT_ORDER[d // num_players]`.
-- Deklarujący **wychodzi w pierwszej lewie** rozdania (`lead_player = declarer`). W kolejnych lewach wychodzi zwycięzca poprzedniej.
+  - w pierwszym rozdaniu sesji **losowy** (z `seed`, deterministycznie),
+  - w każdym następnym kolejny gracz zgodnie z ruchem wskazówek zegara, także między grami.
+  - Dla rozdania o numerze `d` (od 0): `declarer = (first_declarer + d) % num_players`, `contract = CONTRACT_ORDER[d % 7]`.
+- Sesja ma `games * 7` rozdań. Deklarujący **wychodzi w pierwszej lewie** rozdania (`lead_player = declarer`). W kolejnych lewach wychodzi zwycięzca poprzedniej.
 - W każdym rozdaniu karty są tasowane od nowa (deterministycznie z `seed` i numeru rozdania).
 - Wybór kontraktu przez deklarującego (zamiast stałej kolejności) jest poza zakresem tej wersji (sekcja 8).
 
@@ -104,7 +104,7 @@ class Card:               # niezmienna (frozen), porównywalna, hashowalna
 
 class GameState:
     num_players: int                        # 3 lub 4
-    total_deals: int                        # num_players * 7
+    total_deals: int                        # games * 7
     deal_number: int                        # 1..total_deals
     current_contract: GameContract
     declarer: str                           # deklarujący bieżące rozdanie

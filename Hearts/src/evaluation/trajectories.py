@@ -20,7 +20,7 @@ from engine.contracts import GameContract
 
 UNKNOWN_MODEL = "unknown"  # starsze rekordy nie mają pola "model"
 
-# Nagłówek promptu silnika ("KING 4p | You: P1 | Deal 5/28 NO_HEARTS (declarer P0) | Trick 3/13 | ...").
+# Nagłówek promptu silnika ("KING 4p | You: P1 | Deal 2/7 NO_HEARTS (declarer P0) | Trick 3/13 | ...").
 _HEADER_RE = re.compile(
     r"^KING (\d)p \| You: (\w+) \| Deal \d+/\d+ (\w+) \(declarer \w+\) \| Trick (\d+)/\d+"
 )

@@ -56,7 +56,7 @@ def _play(path: Path, players: int, names: list[str], deals: int = 1, seed: int 
         f"P{i}": _Labelled(name, seed + i) for i, name in enumerate(names)
     }
     for deal in range(deals):
-        state = GameState.new(players, seed=seed + deal, start_deal=deal * players + 1)
+        state = GameState.new(players, seed=seed + deal, start_deal=deal % 7 + 1)
         _play_deal(state, controllers, logger)
 
 
@@ -206,7 +206,7 @@ def test_better_play_scores_higher_than_always_first_legal_card(tmp_path: Path) 
     path = tmp_path / "t.jsonl"
     logger = ICLLogger(path)
     for seed in range(12):
-        state = GameState.new(4, seed=seed, start_deal=(seed % 7) * 4 + 1)
+        state = GameState.new(4, seed=seed, start_deal=(seed % 7) + 1)
         controllers: dict[str, PlayerController] = {
             "P0": SmartHeartsBot(num_samples=0, seed=seed),
             "P1": _FirstLegal(),

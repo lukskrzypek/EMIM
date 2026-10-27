@@ -40,7 +40,7 @@ def _settings(tmp_path: Path, name: str = "s.ini") -> AppSettings:
 
 
 def _factory(seed: int):  # type: ignore[no-untyped-def]
-    return lambda n: GameState.new(n, seed=seed, start_deal=n * 7)  # just the last deal
+    return lambda n: GameState.new(n, seed=seed, start_deal=7)  # just the last deal
 
 
 def _bot_session(n: int = 3):  # type: ignore[no-untyped-def]
@@ -149,7 +149,7 @@ def _report_view(qtbot, log: Path, **kw) -> ReportView:  # type: ignore[no-untyp
 
 def test_report_view_shows_the_offline_report(qtbot, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     log = tmp_path / "trajectories.jsonl"
-    _play(4, seed=31, log=log, start_deal=27)  # the last two deals
+    _play(4, seed=31, log=log, start_deal=6)  # the last two deals
     view = _report_view(qtbot, log)
     with qtbot.waitSignal(view.finished, timeout=10000):
         view.refresh()

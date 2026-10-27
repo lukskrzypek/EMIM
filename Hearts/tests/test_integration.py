@@ -47,7 +47,7 @@ def test_random_full_match_is_logged(tmp_path: Path, players: int) -> None:
     scores = state.final_scores
     assert scores is not None
     assert sum(scores.values()) == sum(
-        contract_total_penalty(contract, players) * players for contract in CONTRACT_ORDER
+        contract_total_penalty(contract, players) for contract in CONTRACT_ORDER
     )
     assert played == state.total_deals * state.total_tricks * players
 

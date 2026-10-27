@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.core.cardtext import pretty_card
-from utils.contract_text import contract_label
+from utils.contract_text import DEALS_PER_GAME, contract_label, session_heading
 from gui.core.events import (
     BotUnavailable,
     DealFinished,
@@ -96,11 +96,12 @@ class TrickLogWidget(QListWidget):
     def handle(self, event: GameEvent) -> None:
         if isinstance(event, SessionStarted):
             self.labels = dict(event.seat_labels)
-            self.add_line(f"Sesja: {event.total_deals} rozdań", muted=True)
+            games = max(event.total_deals // DEALS_PER_GAME, 1)
+            self.add_line(f"Sesja: {games} {'gra' if games == 1 else 'gier'}, {event.total_deals} rozdań", muted=True)
         elif isinstance(event, DealStarted):
             contract = contract_label(event.snapshot.contract)
             self.add_line(
-                f"── Rozdanie {event.deal_number}/{event.total_deals}: {contract}, "
+                f"── {session_heading(event.deal_number, event.total_deals)}: {contract}, "
                 f"rozdaje {event.snapshot.declarer} ──",
                 muted=True,
             )

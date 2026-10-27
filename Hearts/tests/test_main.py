@@ -23,7 +23,7 @@ def _bots(num_players: int = 4) -> dict[str, SmartHeartsBot]:
 
 
 def _match_total(num_players: int) -> int:
-    return sum(contract_total_penalty(c, num_players) * num_players for c in CONTRACT_ORDER)
+    return sum(contract_total_penalty(c, num_players) for c in CONTRACT_ORDER)
 
 
 def _answers(monkeypatch: pytest.MonkeyPatch, *values: str) -> None:
@@ -109,7 +109,7 @@ def test_single_simulated_match_is_shown_card_by_card(
     )
     output = capsys.readouterr().out
     assert "Ręce:" in output
-    assert "Rozdanie 1/21" in output and "Rozdanie 21/21" in output
+    assert "Rozdanie 1/7" in output and "Rozdanie 7/7" in output
     assert "T1:" in output
     assert "Partia 1:" not in output
 

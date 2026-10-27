@@ -27,7 +27,7 @@ from gui.qt.table.seat_layout import (
     slot_of,
     trick_card_point,
 )
-from utils.contract_text import WARN_POINTS, contract_label
+from utils.contract_text import WARN_POINTS, contract_label, session_heading
 from gui.qt.theme import ACCENT, BORDER, GOOD, SURFACE, TEXT, TEXT_MUTED, WARN
 
 PLATE_W, PLATE_H = 206.0, 50.0
@@ -243,7 +243,7 @@ class TableScene(QGraphicsScene):
             )
         total_tricks = snapshot.total_tricks
         self.info.setText(
-            f"Rozdanie {model.deal_number}/{model.total_deals}  ·  "
+            f"{session_heading(model.deal_number, model.total_deals)}  ·  "
             f"{contract_label(snapshot.contract)} (rozdaje {snapshot.declarer})  ·  "
             f"lewa {min(snapshot.trick_number, total_tricks)}/{total_tricks}"
         )

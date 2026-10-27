@@ -208,7 +208,7 @@ def test_inconsistent_observation_falls_back_to_heuristics() -> None:
 
 @pytest.mark.parametrize("contract", list(GameContract))
 def test_smart_bots_play_full_legal_deal_in_every_contract(contract: GameContract) -> None:
-    start_deal = CONTRACT_ORDER.index(contract) * 4 + 1
+    start_deal = CONTRACT_ORDER.index(contract) + 1
     state = GameState.new(4, seed=11, start_deal=start_deal)
     bots = {pid: SmartHeartsBot(num_samples=2, seed=i) for i, pid in enumerate(state.player_ids)}
     scores = play_deal(state, bots)
@@ -224,7 +224,7 @@ def test_rule_bots_play_a_whole_match(players: int) -> None:
         play_deal(state, bots)
         if not state.is_over:
             state.start_next_deal()
-    expected = sum(contract_total_penalty(c, players) for c in CONTRACT_ORDER for _ in range(players))
+    expected = sum(contract_total_penalty(c, players) for c in CONTRACT_ORDER)
     assert sum(state.total_scores.values()) == expected
 
 
@@ -242,7 +242,7 @@ def test_smart_bot_beats_random_players() -> None:
     deals = 0
     for contract in CONTRACT_ORDER:
         for seed in range(2):
-            state = GameState.new(4, seed=seed, start_deal=CONTRACT_ORDER.index(contract) * 4 + 1)
+            state = GameState.new(4, seed=seed, start_deal=CONTRACT_ORDER.index(contract) + 1)
             rng = random.Random(seed)
             controllers: dict[str, PlayerController] = {
                 pid: RandomBot(rng) for pid in state.player_ids

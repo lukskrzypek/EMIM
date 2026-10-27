@@ -44,7 +44,7 @@ class PlayerObservation:
     contract: GameContract = GameContract.NO_TRICKS
     declarer: str = "P0"
     deal_number: int = 1
-    total_deals: int = 28
+    total_deals: int = 7
     trick_number: int = 1
     total_tricks: int = 13
     current_player: str | None = None

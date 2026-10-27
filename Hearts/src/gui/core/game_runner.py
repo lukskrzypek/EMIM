@@ -136,7 +136,7 @@ class GameRunner:
     # ------------------------------------------------------------------ run
 
     def _default_engine(self, num_players: int) -> GameState:
-        return GameState.new(num_players, seed=self.config.seed)
+        return GameState.new(num_players, seed=self.config.seed, games=self.config.games)
 
     def _emit(self, event: GameEvent) -> None:
         self._sink(event)

@@ -1,6 +1,6 @@
 # Kierki polskie (King)
 
-Partia kierków polskich (Króla) dla 3 albo 4 graczy: 7 kontraktów w stałej kolejności, każdy rozdaje po kolei każdy gracz (4 graczy: 28 rozdań, 3 graczy: 21 rozdań, talia bez 2C). Wygrywa najmniejsza suma kar. Grają: człowiek, bot heurystyczny (`SmartHeartsBot`) i bot LLM (`AIBot`), w oknie albo w konsoli. Zasady są w `SPEC.md` (a ich źródło w `rules.md`). Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
+Partia kierków polskich (Króla) dla 3 albo 4 graczy. Jedna gra to 7 rozdań, po jednym na każdy kontrakt, w stałej kolejności (3 graczy: talia bez 2C). W lobby wpisuje się, ile takich gier rozegrać. Wygrywa najmniejsza suma kar. Grają: człowiek, bot heurystyczny (`SmartHeartsBot`) i bot LLM (`AIBot`), w oknie albo w konsoli. Zasady są w `SPEC.md` (a ich źródło w `rules.md`). Silnik (`src/engine/`) nie czyta wejścia i niczego nie wypisuje.
 
 ## Szybki start
 
@@ -47,7 +47,7 @@ Nadają się modele czatowe. `llama-prompt-guard`, `whisper`, `tts` czy `dall-e`
 
 ## Konsola
 
-`main.py` pyta o liczbę graczy (3 albo 4) i kontroler na każdym miejscu (człowiek, `SmartHeartsBot`, `AIBot` z Groq albo z OpenAI). Z człowiekiem przy stole jest jedna partia. Same boty: program pyta o liczbę partii (jedna wypisuje ręce i zagrania wszystkich rozdań, wiele — wynik każdej partii i podsumowanie). Partia z czterema `SmartHeartsBot` trwa około dwóch minut. `0` zamiast liczby graczy uruchamia ocenę z logu.
+`main.py` pyta o liczbę graczy (3 albo 4) i kontroler na każdym miejscu (człowiek, `SmartHeartsBot`, `AIBot` z Groq albo z OpenAI). Z człowiekiem przy stole jest jedna gra (7 rozdań). Same boty: program pyta, ile gier zasymulować (każda to 7 rozdań; jedna wypisuje ręce i zagrania, wiele — wynik każdej gry i podsumowanie). `0` zamiast liczby graczy uruchamia ocenę z logu.
 
 Każdy ruch trafia do `logs/trajectories.jsonl` (kontekst, legalne karty, karta, uzasadnienie). Pole `model` to id LLM, `human` albo `smart_bot`.
 
