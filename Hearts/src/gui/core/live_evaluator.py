@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from engine.contracts import GameContract
 from evaluation import GameState, InvalidState, evaluate_all
 from evaluation.params import Params
-from evaluation.report import FORCED_SCENARIO
+from evaluation.report import NON_DECISION_SCENARIOS
 from gui.core.game_runner import AnalysisInput
 from gui.core.table_model import TableModel
 
@@ -45,7 +45,7 @@ class MoveEval:
 
     @property
     def forced(self) -> bool:
-        return self.scenario == FORCED_SCENARIO
+        return self.scenario in NON_DECISION_SCENARIOS
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from evaluation.evaluator import verdict_for
-from evaluation.report import VERDICTS, ModelQuality
+from evaluation.report import NON_DECISION_SCENARIOS, VERDICTS, ModelQuality
 from gui.core.live_evaluator import LiveAnalysis
 
 
@@ -32,7 +32,7 @@ class MoveRecord:
 
     @property
     def forced(self) -> bool:
-        return self.scenario == "only_move"
+        return self.scenario in NON_DECISION_SCENARIOS
 
 
 @dataclass

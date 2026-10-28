@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from .cards import Card, full_deck, parse_card, total_tricks
 from .params import Params
-from engine.contracts import GameContract
+from engine.contracts import GameContract, contract_total_penalty
 
 from .rounds import RoundRules, get_rules
 
@@ -37,6 +37,12 @@ class Ctx:
     ref_penalty: float          # "zła lewa": kara za lewę + najwyższa pojedyncza karta (normalizacja ryzyka)
     total_tricks: int = 13
     legal: list[Card] | None = None   # legalne karty podane z zewnątrz (reguły silnika)
+    # wiedza o przeciwnikach z historii (miejsca liczone względem wychodzącego w 1. lewie)
+    followers: list[int] = field(default_factory=list)       # miejsca graczy po mnie w tej lewie
+    hand_sizes: dict[int, int] = field(default_factory=dict)  # miejsce przeciwnika -> liczba kart
+    voids: dict[int, set[str]] = field(default_factory=dict)  # znane renonse (zagrał inny kolor)
+    declined: dict[int, set[Card]] = field(default_factory=dict)  # mógł bezpiecznie dołożyć tę karę, nie zrobił
+    contract_total: int = 0     # suma wszystkich kar rozdania (skala bezwzględnej wagi kary)
 
     # ---------- podstawowe ----------
     @property
@@ -142,9 +148,9 @@ class Ctx:
         if self.n_remaining == 0 or total == 0:
             return float(known)
         # karty punktowane tego samego koloru, które mogą trafić do lewy od graczy po mnie
-        share = min(1.0, self.n_remaining * self.h / total)
-        same = sum(self.pen(c) for c in self.unseen if c.suit == suit)
-        e_same = P.attack_rate * share * same
+        # (z uwzględnieniem renonsów i "odmów" - patrz hold_prob)
+        same = sum(self.p_comes(c) * self.pen(c) for c in self.unseen if c.suit == suit and self.pen(c) > 0)
+        e_same = P.attack_rate * same
         # gracz bez koloru może zrzucić mi dowolną punktowaną kartę
         others = [self.pen(c) for c in self.unseen if c.suit != suit and self.pen(c) > 0]
         e_void = 0.0
@@ -153,6 +159,101 @@ class Ctx:
             p_has = min(1.0, self.h * len(others) / total)
             e_void = P.attack_rate * self.void_prob(suit) * p_has * mean_pen
         return known + e_same + void_weight * e_void
+
+    # ---------- wiedza o przeciwnikach ----------
+    def hold_prob(self, card: Card, seat: int) -> float:
+        """P(niewidziana karta jest u przeciwnika na miejscu ``seat``) - z uwzględnieniem renonsów
+        i "odmowy" dołożenia tej karty (mógł blefować, więc nie zero)."""
+        def weight(s: int) -> float:
+            if card.suit in self.voids.get(s, ()):
+                return 0.0
+            bluff = self.params.decline_bluff if card in self.declined.get(s, ()) else 1.0
+            return self.hand_sizes[s] * bluff
+        total = sum(weight(s) for s in self.hand_sizes)
+        return weight(seat) / total if total > 0 else 0.0
+
+    def p_comes(self, card: Card) -> float:
+        """P(niewidziana karta jest u któregoś z graczy, którzy zagrają po mnie w tej lewie)."""
+        return sum(self.hold_prob(card, s) for s in self.followers)
+
+    def p_stuck(self, card: Card) -> float:
+        """P(zostanę z lewą, gdy gracze po mnie chcą mi dorzucić karę - nikt nie przebija dobrowolnie).
+
+        Przebić muszą tylko ci, którzy mają w kolorze same wyższe karty."""
+        if not self.beats_current(card):
+            return 0.0
+        suit = self.lead_suit or card.suit
+        fol = [s for s in self.followers if suit not in self.voids.get(s, ())]
+        if not fol:
+            return 1.0
+        in_suit = [c for c in self.unseen if c.suit == suit]
+        higher = [c for c in in_suit if c.value > card.value]
+        if not higher:
+            return 1.0
+        n_hi = len(higher)
+        per_player = len(in_suit) / len(fol)
+        forced = (n_hi / len(in_suit)) ** max(0.0, per_player - 1)  # posiadacz wyższej nie ma niższej
+        p = 1.0
+        for c in higher:
+            p *= 1 - forced * sum(self.hold_prob(c, s) for s in fol)
+        return p
+
+    def severity(self, points: float) -> float:
+        """0..1: bezwzględna waga kary względem całej puli kar kontraktu (dama w "bez dam" = 1)."""
+        P = self.params
+        if points <= 0 or self.contract_total <= 0:
+            return 0.0
+        return min(1.0, points / (P.severe_share * self.contract_total)) ** P.severity_exp
+
+    def danger_loss(self, card: Card, shed: bool = False) -> float:
+        """0..1: strata za wystawienie się na dorzucenie kary, gdy biorę lewę.
+
+        * pułapka - niewidziana karta punktowana tego koloru, niższa od mojej, może u graczy po mnie
+          (np. król, gdy dama nie wyszła, w rundzie bez dam),
+        * znany renons - gracz po mnie nie ma koloru (pokazał to wcześniej) i zrzuci mi karę.
+        ``shed`` - pozbywam się koloru (ostatnia/przedostatnia karta): tania kara jest wtedy akceptowalna."""
+        P = self.params
+        if self.n_remaining == 0 or not self.beats_current(card):
+            return 0.0
+        suit = self.lead_suit or card.suit
+        trap = [c for c in self.unseen if c.suit == suit and c.value < card.value and self.pen(c) > 0]
+        e_trap = sum(self.p_comes(c) * self.pen(c) for c in trap)
+        e_trap = min(e_trap, self.n_remaining * max((self.pen(c) for c in trap), default=0))
+        off = sorted((c for c in self.unseen if c.suit != suit and self.pen(c) > 0),
+                     key=lambda c: -self.pen(c))
+        e_void, dumped = 0.0, list(trap)
+        for s in self.followers:
+            if suit not in self.voids.get(s, ()):
+                continue
+            dumped = trap + off
+            none = 1.0  # oczekiwana najwyższa kara, jaką ten gracz ma do zrzucenia
+            for c in off:
+                hp = self.hold_prob(c, s)
+                e_void += none * hp * self.pen(c)
+                none *= 1 - hp
+        sev = self.severity(e_trap + e_void)
+        if sev == 0:
+            return 0.0
+        relief = 1.0
+        if shed:  # pozbycie się koloru jest warte zapłaty tylko tanią karą (kier tak, dama nigdy)
+            worst = max(self.pen(c) for c in dumped) / (P.severe_share * self.contract_total)
+            relief = 1 - P.void_shed_relief * max(0.0, 1 - worst)
+        return min(1.0, self.p_stuck(card) * P.dump_rate * sev * relief)
+
+    def is_bait(self, card: Card) -> bool:
+        """Wyjście najniższą pozostałą kartą koloru, którego jeden z graczy po mnie nie ma
+        (znany renons), a ktoś inny go ma - lewę na pewno weźmie przeciwnik i to on dostanie zrzut."""
+        if self.current or not any(card.suit in self.voids.get(s, ()) for s in self.followers):
+            return False
+        rest = [c for c in self.unseen if c.suit == card.suit]
+        return bool(rest) and all(c.value > card.value for c in rest)
+
+    def nothing_left(self) -> bool:
+        """Nie ma już żadnej kary do wzięcia (karty ani lewy) - żaden ruch niczego nie psuje."""
+        cards = self.hand + self.current + self.unseen
+        return (all(self.pen(c) == 0 for c in cards)
+                and all(self.rules.trick_penalty(t) == 0
+                        for t in range(self.trick_number, self.total_tricks + 1)))
 
     def risk(self, card: Card, void_weight: float = 1.0) -> float:
         """0..1: P(wezmę) * oczekiwana kara, względem "złej lewy"."""
@@ -199,10 +300,45 @@ def prepare(state: GameState, params: Params) -> Ctx:
     played = {c for t in history for c in t}
     max_card_pen = max(rules.card_penalty(c) for c in deck if c not in played)
     trick_number = len(history) + 1
+    me, voids, declined = _seat_knowledge(history, current, n_players, deck, rules)
+    order = [(me + i) % n_players for i in range(1, n_players)]
+    before = {(me - i) % n_players for i in range(1, len(current) + 1)}
     return Ctx(
         hand=hand, current=current, unseen=unseen, rules=rules, params=params,
         trick_number=trick_number,
         n_remaining=n_players - len(current) - 1,
         ref_penalty=float(rules.trick_penalty(trick_number) + max_card_pen),
         total_tricks=n_tricks, legal=legal,
+        followers=order[:n_players - len(current) - 1],
+        hand_sizes={s: len(hand) - (s in before) for s in order},
+        voids={s: voids[s] for s in order}, declined={s: declined[s] for s in order},
+        contract_total=contract_total_penalty(state.contract, n_players),
     )
+
+
+def _seat_knowledge(history: list[list[Card]], current: list[Card], n: int, deck: list[Card],
+                    rules: RoundRules) -> tuple[int, dict[int, set[str]], dict[int, set[Card]]]:
+    """(moje miejsce, renonse, "odmowy") z kolejności kart; miejsce 0 wychodzi w 1. lewie,
+    kolejną lewę otwiera zwycięzca poprzedniej."""
+    voids: dict[int, set[str]] = {s: set() for s in range(n)}
+    declined: dict[int, set[Card]] = {s: set() for s in range(n)}
+    leader = 0
+    for trick in [*history, current]:
+        if not trick:
+            break
+        lead = trick[0].suit
+        best = 0
+        for i, c in enumerate(trick[1:], start=1):
+            seat = (leader + i) % n
+            if c.suit != lead:
+                voids[seat].add(lead)
+                continue
+            top = trick[best]
+            # pod wyższą kartę mógł bezpiecznie dołożyć większą karę tego koloru - nie zrobił tego
+            declined[seat] |= {d for d in deck if d.suit == lead and d.value < top.value
+                               and rules.card_penalty(d) > rules.card_penalty(c)}
+            if c.value > top.value:
+                best = i
+        if len(trick) == n:
+            leader = (leader + best) % n
+    return (leader + len(current)) % n, voids, declined

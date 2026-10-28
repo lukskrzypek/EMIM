@@ -2,6 +2,7 @@
 
 Scenariusze (wybierane w score_move):
   only_move    - jedyna legalna karta
+  nothing_left - nie ma już żadnej kary do wzięcia: każdy ruch jest optymalny
   forced_take  - każda moja legalna karta na pewno bierze lewę
   lead         - ja otwieram lewę
   follow_take  - dokładam do koloru kartą, która bije aktualną
@@ -39,6 +40,9 @@ def score_move(ctx: Ctx, card: Card) -> Score:
     legal = ctx.legal_cards()
     if len(legal) == 1:
         return Score("only_move", 100.0, None, ["Jedyna legalna karta - ruch wymuszony."])
+    if ctx.nothing_left():
+        return Score("nothing_left", 100.0, None,
+                     ["Nie ma już kar do wzięcia - żaden ruch niczego nie psuje."])
     if all(ctx.sure_win(c) for c in legal):
         return _forced_take(ctx, card, legal)
     if not ctx.current:
@@ -74,6 +78,26 @@ def _forced_take(ctx: Ctx, card: Card, legal: list[Card]) -> Score:
     return Score("forced_take", _clamp(corr), None, reasons)
 
 
+def _shed(ctx: Ctx, card: Card) -> bool:
+    """Wychodzę ostatnią albo przedostatnią kartą koloru - pozbywam się go."""
+    return not ctx.current and sum(1 for c in ctx.hand if c.suit == card.suit) <= 2
+
+
+def _apply_danger(ctx: Ctx, card: Card, legal: list[Card], corr: float,
+                  reasons: list[str], comps: dict[str, float]) -> float:
+    """Limit poprawności za wystawienie się na dorzucenie kary (pułapka pod wysoką kartą, znany renons),
+    względem najbezpieczniejszej legalnej karty - gdy każda karta jest groźna, nie ma lepszego wyjścia."""
+    loss = ctx.danger_loss(card, _shed(ctx, card))
+    comps["danger"] = loss
+    if loss <= 0:
+        return corr
+    rel = loss - min(ctx.danger_loss(c, _shed(ctx, c)) for c in legal)
+    if rel >= 0.3:
+        reasons.append("Gracz po mnie może bezpiecznie dorzucić mi karę (niższa karta punktowana "
+                       "tego koloru w grze albo znany brak koloru).")
+    return min(corr, 100 - ctx.params.danger_loss * rel)
+
+
 # ---------------------------------------------------------------------------
 def _intent(ctx: Ctx, p_win: float) -> float:
     """Zamiar zebrania lewy: rośnie z numerem lewy (po wygranej trzeba wyjść w następnej)."""
@@ -104,8 +128,9 @@ def _follow_take(ctx: Ctx, card: Card, legal: list[Card]) -> Score:
         reasons.append(f"Wysokie ryzyko wzięcia kar (ryzyko={risk:.2f}).")
     void = ctx.void_prob(card.suit)
     aggr = _intent(ctx, p) + P.void_aggr * void * p + P.risk_aggr * risk
-    return Score("follow_take", _clamp(corr), _clamp(aggr), reasons,
-                 {"p_win": p, "risk": risk, "void_prob": void, "progress": ctx.progress})
+    comps = {"p_win": p, "risk": risk, "void_prob": void, "progress": ctx.progress}
+    corr = _apply_danger(ctx, card, legal, corr, reasons, comps)
+    return Score("follow_take", _clamp(corr), _clamp(aggr), reasons, comps)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +153,21 @@ def _safe_discard(ctx: Ctx, card: Card, legal: list[Card]) -> Score:
             reasons.append("Mogłem zrzucić większą karę.")
     else:
         missed = P.missed_dump_loss * min(1.0, max_pen / ref) if pens and ref > 0 else 0.0
-        top = max(c.value for c in safe if ctx.pen(c) == 0)
-        corr = 100 - missed - P.shed_rank_loss * (top - card.value) / 12
+        # w obrębie koloru: zrzucam niską kartę, choć mam wyższą, która też nie bierze - niskie karty
+        # przydają się później (z czasem błąd większy); karty bez niewidzianych kart pomiędzy są równoważne
+        top = max(c.value for c in safe if ctx.pen(c) == 0 and c.suit == card.suit)
+        gap = sum(1 for c in ctx.unseen if c.suit == card.suit and card.value < c.value < top)
+        rank_loss = ((P.duck_rank_loss + P.duck_rank_progress * ctx.progress)
+                     * min(1.0, gap / P.rank_gap_full) ** 0.5)
+        corr = 100 - missed - rank_loss
+        comps_suit = 0.0
+        if scenario == "void_discard":
+            # między kolorami wybór jest wolny, ale opróżnienie koloru daje kolejne zrzuty
+            counts = Counter(c.suit for c in ctx.hand)
+            if counts[card.suit] > 1 and any(counts[c.suit] == 1 for c in safe if ctx.pen(c) == 0):
+                comps_suit = P.void_suit_loss
+                corr -= comps_suit
+                reasons.append("Mogłem pozbyć się ostatniej karty innego koloru.")
         holds_pen = any(ctx.pen(c) > 0 for c in ctx.hand)
         heavy = ctx.heavy_prob(card.suit) if holds_pen else 0.0
         corr += P.suspect_bonus * heavy
@@ -142,8 +180,9 @@ def _safe_discard(ctx: Ctx, card: Card, legal: list[Card]) -> Score:
             comps["missed_take"] = take
             if take >= 0.3:
                 reasons.append("Mogłem bezpiecznie zebrać czystą lewę - szkoda niskiej karty na tym etapie.")
-        if card.value < top:
-            reasons.append("Mam wyższą kartę, która też nie bierze lewy.")
+        if gap:
+            reasons.append("Mam wyższą kartę tego koloru, która też nie bierze lewy - "
+                           "pozbywam się niskiej karty, która przydałaby się później.")
         if pens:
             reasons.append("Zrzucam kartę niepunktowaną, choć mogłem zrzucić punktową - "
                            "bardziej ryzykowne" + (", ale ktoś prawdopodobnie ma dużo tego koloru."
@@ -187,7 +226,10 @@ def _lead(ctx: Ctx, card: Card) -> Score:
     danger = (ctx.rules.trick_penalty(ctx.trick_number) > 0
               or any(ctx.pen(c) > 0 for c in ctx.unseen if c.suit == suit))
 
-    if own_pen[suit]:
+    if ctx.is_bait(card):
+        reasons.append("Najniższa karta koloru, którego ktoś nie ma - lewę na pewno weźmie inny gracz "
+                       "i to jemu zostanie zrzucona kara.")
+    elif own_pen[suit]:
         if clean:
             corr -= P.lead_own_penalty_loss
             reasons.append("Wychodzę w kolor, w którym mam własne karty punktowane - nic to nie daje.")
@@ -205,5 +247,6 @@ def _lead(ctx: Ctx, card: Card) -> Score:
     if void >= 0.3:
         reasons.append("Sporo tego koloru już zagrano - rośnie szansa, że komuś się skończy.")
     aggr = _intent(ctx, p) + P.void_aggr * void + P.risk_aggr * risk
-    return Score("lead", _clamp(corr), _clamp(aggr), reasons,
-                 {"p_win": p, "risk": risk, "void_prob": void, "progress": ctx.progress})
+    comps = {"p_win": p, "risk": risk, "void_prob": void, "progress": ctx.progress}
+    corr = _apply_danger(ctx, card, ctx.legal_cards(), corr, reasons, comps)
+    return Score("lead", _clamp(corr), _clamp(aggr), reasons, comps)

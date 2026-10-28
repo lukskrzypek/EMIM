@@ -14,6 +14,8 @@ from .trajectories import LoadResult, load_moves
 VERDICTS = ("optymalne", "poprawne", "wątpliwe", "niepoprawne")
 VERDICT_HEADERS = ("optym.", "popraw.", "wątpl.", "niepop.")
 FORCED_SCENARIO = "only_move"  # jedyna legalna karta: nie świadczy o jakości gry
+# Ruchy bez realnego wyboru: pokazywane jako optymalne, ale pomijane w statystykach.
+NON_DECISION_SCENARIOS = frozenset({FORCED_SCENARIO, "nothing_left"})  # nothing_left: brak kar do wzięcia
 
 
 @dataclass
@@ -22,7 +24,7 @@ class ModelQuality:
 
     model: str
     moves: int = 0                                  # wszystkie ocenione ruchy
-    forced: int = 0                                 # ruchy wymuszone (jedna legalna karta)
+    forced: int = 0                                 # ruchy bez wyboru (jedna legalna karta, brak kar)
     illegal: int = 0                                # ruchy, których ewaluator uznał za nielegalne
     correctness_sum: float = 0.0                    # tylko ruchy z wyborem
     aggressiveness_sum: float = 0.0
@@ -72,7 +74,7 @@ def build_report(load: LoadResult, ignored_models: Collection[str] = ()) -> Qual
         if not evaluation.legal or evaluation.correctness is None:
             stats.illegal += 1
             continue
-        if evaluation.scenario == FORCED_SCENARIO:
+        if evaluation.scenario in NON_DECISION_SCENARIOS:
             stats.forced += 1
             continue
         stats.correctness_sum += evaluation.correctness
@@ -128,7 +130,8 @@ def format_report(report: QualityReport) -> str:
         )
     lines.append("")
     lines.append("Poprawność i agresywność: skala 0-100, liczone tylko z ruchów z wyborem")
-    lines.append("(bez ruchów wymuszonych - jedna legalna karta). Kolumny 'optym.' ... 'niepop.' to")
+    lines.append("(bez ruchów wymuszonych - jedna legalna karta albo brak kar do wzięcia).")
+    lines.append("Kolumny 'optym.' ... 'niepop.' to")
     lines.append("odsetek ruchów z danym werdyktem (>=90 optymalne, >=70 poprawne, >=40 wątpliwe).")
     for m in ranked:
         if not m.scenarios:
